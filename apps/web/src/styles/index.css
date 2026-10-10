@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Talorys design tokens. Neutral foundation with a calm teal brand accent.
+ * Semantic colors are CSS variables so light/dark modes swap in one place.
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --color-brand-50: oklch(0.98 0.02 185);
+  --color-brand-100: oklch(0.95 0.05 185);
+  --color-brand-200: oklch(0.9 0.08 185);
+  --color-brand-300: oklch(0.83 0.11 185);
+  --color-brand-400: oklch(0.75 0.13 185);
+  --color-brand-500: oklch(0.65 0.12 185);
+  --color-brand-600: oklch(0.55 0.1 185);
+  --color-brand-700: oklch(0.47 0.085 185);
+  --color-brand-800: oklch(0.39 0.07 185);
+  --color-brand-900: oklch(0.32 0.055 185);
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-subtle: var(--subtle);
+  --color-muted: var(--muted);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+
+  --animate-fade-in: fade-in 160ms ease-out;
+  --animate-slide-up: slide-up 180ms ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+:root {
+  --bg: oklch(0.99 0.002 240);
+  --surface: oklch(1 0 0);
+  --subtle: oklch(0.975 0.003 240);
+  --muted: oklch(0.955 0.004 240);
+  --fg: oklch(0.21 0.01 250);
+  --fg-muted: oklch(0.45 0.012 250);
+  --fg-subtle: oklch(0.6 0.01 250);
+  --border: oklch(0.92 0.004 250);
+  --border-strong: oklch(0.86 0.006 250);
+  --accent: var(--color-brand-700);
+  --accent-fg: oklch(0.99 0.01 185);
+  --accent-soft: var(--color-brand-50);
+  --danger: oklch(0.55 0.19 25);
+  --danger-soft: oklch(0.97 0.02 25);
+  --warning: oklch(0.7 0.14 70);
+  --success: oklch(0.58 0.13 155);
+  color-scheme: light;
+}
+
+.dark {
+  --bg: oklch(0.17 0.006 250);
+  --surface: oklch(0.205 0.007 250);
+  --subtle: oklch(0.225 0.008 250);
+  --muted: oklch(0.26 0.009 250);
+  --fg: oklch(0.95 0.004 250);
+  --fg-muted: oklch(0.75 0.008 250);
+  --fg-subtle: oklch(0.6 0.01 250);
+  --border: oklch(0.29 0.009 250);
+  --border-strong: oklch(0.36 0.01 250);
+  --accent: var(--color-brand-400);
+  --accent-fg: oklch(0.18 0.03 185);
+  --accent-soft: oklch(0.27 0.04 185);
+  --danger: oklch(0.68 0.17 25);
+  --danger-soft: oklch(0.28 0.05 25);
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-fg font-sans antialiased;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--accent) 25%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Text fields show their own focus ring (border + ring utilities). */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+
+/* Markdown rendering for chat and notes */
+.prose-talorys {
+  @apply text-[15px] leading-7 text-fg;
+  overflow-wrap: anywhere;
+}
+.prose-talorys > * + * { margin-top: 0.75em; }
+.prose-talorys h1 { @apply text-xl font-semibold tracking-tight mt-5; }
+.prose-talorys h2 { @apply text-lg font-semibold tracking-tight mt-5; }
+.prose-talorys h3 { @apply text-base font-semibold mt-4; }
+.prose-talorys ul { @apply list-disc pl-5; }
+.prose-talorys ol { @apply list-decimal pl-5; }
+.prose-talorys li + li { margin-top: 0.25em; }
+.prose-talorys a { @apply text-accent underline underline-offset-2; }
+.prose-talorys blockquote { @apply border-l-2 border-border-strong pl-4 text-fg-muted; }
+.prose-talorys code:not(pre code) {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em];
+}
+.prose-talorys pre { @apply overflow-x-auto rounded-lg bg-subtle p-4 font-mono text-[13px] leading-6 border border-border; }
+.prose-talorys table { @apply w-full text-sm border-collapse; }
+.prose-talorys th, .prose-talorys td { @apply border border-border px-3 py-1.5 text-left; }
+.prose-talorys hr { @apply border-border; }
+.prose-talorys input[type="checkbox"] { @apply mr-1.5 align-middle; }
+
+.scrollbar-thin { scrollbar-width: thin; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* biome-ignore lint/complexity/noImportantStyles: reduced motion must override component animations */
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

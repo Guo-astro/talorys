@@ -1,0 +1,90 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { DO_MIGRATIONS, generateAgentConfig, generateInstallationId, generatePagesConfig, resourceNames, toJsonc } from "../src/config";
+import { sanitize, explainWranglerFailure } from "../src/errors";
+import { writeManifest, type Manifest } from "../src/manifest";
+import { parseJsonOutput } from "../src/wrangler";
+import { runChecks } from "../src/verify";
+import { fakeSite, makeSandbox } from "./helpers";
+
+const stripJsonc = (s: string) => JSON.parse(s.replace(/^\s*\/\/.*$/gm, ""));
+
+describe("configuration generation", () => {
+  it("generates DNS-safe, collision-resistant installation ids", () => {
+    const ids = new Set(Array.from({ length: 2000 }, () => generateInstallationId()));
+    expect(ids.size).toBe(2000);
+    for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9]{7}$/);
+  });
+
+  it("derives predictable resource names", () => {
+    expect(resourceNames("abcd1234")).toEqual({
+      installationId: "abcd1234",
+      workerName: "talorys-abcd1234-agent",
+      pagesProjectName: "talorys-abcd1234-web",
+    });
+    expect(() => resourceNames("../x")).toThrow();
+  });
+
+  it("agent Worker is private, has AI, a SQLite DO and append-only migrations", () => {
+    const cfg = stripJsonc(toJsonc(generateAgentConfig({ workerName: "w", installationId: "abcd1234", version: "1", timezone: "Europe/Paris", agentName: "Ada" })));
+    expect(cfg.workers_dev).toBe(false);
+    expect(cfg.preview_urls).toBe(false);
+    expect(cfg.ai).toEqual({ binding: "AI" });
+    expect(cfg.durable_objects.bindings).toEqual([{ name: "TalorysAgent", class_name: "TalorysAgent" }]);
+    expect(cfg.migrations).toEqual([{ tag: "v1", new_sqlite_classes: ["TalorysAgent"] }]);
+    expect(cfg.compatibility_flags).toContain("nodejs_compat");
+    expect(cfg.vars.TALORYS_DEFAULT_TIMEZONE).toBe("Europe/Paris");
+    expect(JSON.stringify(cfg)).not.toMatch(/SECRET|PASSWORD/);
+  });
+
+  it("migrations match the agent's development config", () => {
+    const dev = stripJsonc(readFileSync(join(__dirname, "../../../apps/agent/wrangler.jsonc"), "utf8"));
+    expect(dev.migrations).toEqual(DO_MIGRATIONS);
+    expect(dev.workers_dev).toBe(false);
+  });
+
+  it("Pages config binds the private Worker", () => {
+    const cfg = stripJsonc(toJsonc(generatePagesConfig({ pagesProjectName: "p", workerName: "w" })));
+    expect(cfg).toMatchObject({ name: "p", pages_build_output_dir: "./dist", services: [{ binding: "AGENT", service: "w" }] });
+  });
+});
+
+describe("manifest", () => {
+  it("refuses to persist anything that looks like a secret", () => {
+    const sb = makeSandbox();
+    const m = { installation_id: "abcd1234", account_id: "a", worker_name: "w", pages_project_name: "p", agent_name: "pbkdf2-sha256$1$x$y" } as unknown as Manifest;
+    expect(() => writeManifest(sb.root, m)).toThrow(/secrets/);
+  });
+});
+
+describe("wrangler output handling", () => {
+  it("parses JSON surrounded by warnings", () => {
+    expect(parseJsonOutput<{ a: number }>('▲ [WARNING] proxy\n{"a":1}\n')).toEqual({ a: 1 });
+    expect(parseJsonOutput<number[]>("[1,2]")).toEqual([1, 2]);
+  });
+
+  it("redacts credentials from error details", () => {
+    expect(sanitize("Error: token=abc123 failed\napi_key: xyz")).not.toMatch(/abc123|xyz/);
+  });
+
+  it("classifies common failures with recovery hints", () => {
+    expect(explainWranglerFailure("X", "fetch failed ETIMEDOUT").message).toMatch(/network/);
+    expect(explainWranglerFailure("X", "[code: 10001] forbidden").hint).toMatch(/Workers Scripts:Edit/);
+  });
+});
+
+describe("post-deploy verification", () => {
+  it("passes against a healthy deployment", async () => {
+    const checks = await runChecks("https://x.pages.dev", fakeSite());
+    expect(checks.every((c) => c.ok)).toBe(true);
+    expect(checks).toHaveLength(4);
+  });
+
+  it("flags a backend that accepts anonymous private requests", async () => {
+    const open = (async (url: string) =>
+      new URL(url).pathname === "/api/tasks" ? Response.json({ tasks: [] }) : fakeSite()(url)) as typeof fetch;
+    const checks = await runChecks("https://x.pages.dev", open);
+    expect(checks.find((c) => c.name.includes("anonymous"))?.ok).toBe(false);
+  });
+});

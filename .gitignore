@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.dev.vars.*
+*.tsbuildinfo
+.DS_Store
+coverage/
+test-results/
+playwright-report/
+packages/create-talorys/templates/
+*.tgz
+.env
+.env.*
+test-results/

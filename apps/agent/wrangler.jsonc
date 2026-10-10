@@ -1,0 +1,18 @@
+// Local development configuration for the Talorys agent Worker.
+// The installer generates the production equivalent with unique names.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "talorys-dev-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Private backend: reachable only through the Pages service binding.
+  "workers_dev": false,
+  "preview_urls": false,
+  "ai": { "binding": "AI" },
+  "durable_objects": {
+    "bindings": [{ "name": "TalorysAgent", "class_name": "TalorysAgent" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TalorysAgent"] }],
+  "observability": { "enabled": true }
+}

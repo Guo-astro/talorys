@@ -1,0 +1,16 @@
+{
+  "name": "@talorys/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./constants": "./src/constants.ts",
+    "./crypto": "./src/crypto.ts",
+    "./password-policy": "./src/password-policy.ts",
+    "./recurrence": "./src/recurrence.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}

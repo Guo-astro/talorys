@@ -1,0 +1,294 @@
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router";
+import type { Note, Project } from "@talorys/shared";
+import { ArrowLeft, Eye, FolderKanban, NotebookPen, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Markdown } from "../components/Markdown";
+import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorNotice, Input, Select, Spinner, Textarea } from "../components/ui";
+import { keys, useApiMutation, useNotes, useProjects } from "../hooks/queries";
+import { api } from "../lib/api";
+import { cn, relativeTime } from "../lib/utils";
+
+export default function NotesPage() {
+  const { noteId } = useParams();
+  const navigate = useNavigate();
+  const [q, setQ] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q.trim()), 200);
+    return () => clearTimeout(t);
+  }, [q]);
+  const { data: notes, isLoading, error, refetch } = useNotes(debounced || undefined);
+
+  const create = useApiMutation(() => api<{ note: Note }>("/notes", { method: "POST", body: { title: "Untitled", content: "" } }), {
+    invalidate: [["notes"]],
+    onSuccess: (r) => navigate(`/notes/${r.note.id}?edit=1`),
+  });
+
+  return (
+    <div className="flex h-full min-h-[calc(100vh-3.5rem)] md:min-h-full">
+      <aside className={cn("w-full shrink-0 flex-col border-r border-border md:flex md:w-80", noteId ? "hidden" : "flex")}>
+        <div className="space-y-3 p-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-semibold tracking-tight">Notes</h1>
+            <div className="flex gap-1">
+              <Button variant="ghost" size="icon" onClick={() => setProjectsOpen(true)} aria-label="Manage projects">
+                <FolderKanban className="h-4 w-4" />
+              </Button>
+              <Button size="icon" onClick={() => create.mutate(undefined)} loading={create.isPending} aria-label="New note">
+                {!create.isPending && <Plus className="h-4 w-4" />}
+              </Button>
+            </div>
+          </div>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search notes" className="h-9 pl-9 text-sm" aria-label="Search notes" />
+          </div>
+        </div>
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          {error ? (
+            <div className="p-2">
+              <ErrorNotice error={error} onRetry={() => void refetch()} />
+            </div>
+          ) : isLoading ? (
+            <div className="flex justify-center py-10">
+              <Spinner />
+            </div>
+          ) : !notes?.length ? (
+            <EmptyState icon={<NotebookPen className="h-8 w-8" />} title={debounced ? "No matches" : "No notes yet"}>
+              {debounced ? "Try another search." : "Capture ideas, plans and reference material. Markdown supported."}
+            </EmptyState>
+          ) : (
+            <ul className="space-y-0.5">
+              {notes.map((n) => (
+                <li key={n.id}>
+                  <button type="button"
+                    onClick={() => navigate(`/notes/${n.id}`)}
+                    className={cn(
+                      "w-full rounded-lg px-3 py-2.5 text-left transition-colors",
+                      n.id === noteId ? "bg-muted" : "hover:bg-muted/60",
+                    )}
+                  >
+                    <p className="truncate text-sm font-medium">{n.title}</p>
+                    <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-fg-subtle">
+                      {relativeTime(n.updated_at)}
+                      {n.content ? ` · ${n.content.replace(/[#*_`>\-[\]]/g, "").slice(0, 120)}` : ""}
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </aside>
+
+      <section className={cn("min-w-0 flex-1", !noteId && "hidden md:block")}>
+        {noteId ? (
+          <NoteEditor key={noteId} id={noteId} onBack={() => navigate("/notes")} />
+        ) : (
+          <EmptyState icon={<NotebookPen className="h-9 w-9" />} title="Select a note">
+            Or create a new one with the + button.
+          </EmptyState>
+        )}
+      </section>
+      <ProjectsDialog open={projectsOpen} onClose={() => setProjectsOpen(false)} />
+    </div>
+  );
+}
+
+function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
+  const projects = useProjects();
+  const [note, setNote] = useState<Note | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [projectId, setProjectId] = useState("");
+  const [mode, setMode] = useState<"edit" | "preview">(() => (new URLSearchParams(location.search).get("edit") ? "edit" : "preview"));
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    api<{ note: Note }>(`/notes/${id}`)
+      .then((r) => {
+        setNote(r.note);
+        setTitle(r.note.title);
+        setContent(r.note.content);
+        setProjectId(r.note.project_id ?? "");
+        if (!r.note.content) setMode("edit");
+      })
+      .catch(setLoadError);
+  }, [id]);
+
+  const dirty = !!note && (title !== note.title || content !== note.content || projectId !== (note.project_id ?? ""));
+
+  const save = useApiMutation(
+    () => api<{ note: Note }>(`/notes/${id}`, { method: "PATCH", body: { title: title.trim() || "Untitled", content, project_id: projectId || null } }),
+    { invalidate: [["notes"]], success: "Note saved", onSuccess: (r) => setNote(r.note) },
+  );
+  const remove = useApiMutation(() => api(`/notes/${id}`, { method: "DELETE" }), {
+    invalidate: [["notes"]],
+    success: "Note deleted",
+    onSuccess: onBack,
+  });
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (dirty) save.mutate(undefined);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [dirty, save]);
+
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (dirty) e.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  if (loadError) return <div className="p-6"><ErrorNotice error={loadError} /></div>;
+  if (!note) return <div className="flex justify-center py-16"><Spinner /></div>;
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={onBack} className="md:hidden" aria-label="Back to notes">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="flex rounded-lg bg-muted p-0.5">
+            <button type="button" onClick={() => setMode("edit")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium", mode === "edit" ? "bg-surface shadow-sm" : "text-fg-muted")}>
+              <Pencil className="h-3 w-3" /> Edit
+            </button>
+            <button type="button" onClick={() => setMode("preview")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium", mode === "preview" ? "bg-surface shadow-sm" : "text-fg-muted")}>
+              <Eye className="h-3 w-3" /> Preview
+            </button>
+          </div>
+          {dirty && <Badge tone="warning">Unsaved</Badge>}
+        </div>
+        <div className="flex items-center gap-1">
+          <Select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="h-8 w-36 text-xs" aria-label="Project">
+            <option value="">No project</option>
+            {projects.data?.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+          <Button variant="ghost" size="icon" onClick={() => setConfirmDelete(true)} aria-label="Delete note">
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          <Button size="sm" onClick={() => save.mutate(undefined)} disabled={!dirty} loading={save.isPending}>
+            Save
+          </Button>
+        </div>
+      </div>
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-3xl px-5 py-6 md:px-8">
+          <input
+            ref={titleRef}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={300}
+            placeholder="Title"
+            aria-label="Note title"
+            className="w-full bg-transparent text-2xl font-semibold tracking-tight placeholder:text-fg-subtle focus:outline-none"
+          />
+          <p className="mt-1 text-xs text-fg-subtle">Edited {relativeTime(note.updated_at)}</p>
+          <div className="mt-6">
+            {mode === "edit" ? (
+              <Textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder="Write in Markdown…"
+                aria-label="Note content"
+                className="min-h-[50vh] resize-y border-none bg-transparent px-0 font-mono text-sm shadow-none focus:ring-0"
+              />
+            ) : content ? (
+              <Markdown content={content} />
+            ) : (
+              <p className="text-sm text-fg-subtle">Empty note.</p>
+            )}
+          </div>
+        </div>
+      </div>
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete note?"
+        message={`“${note.title}” will be permanently deleted.`}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => remove.mutate(undefined)}
+        loading={remove.isPending}
+      />
+    </div>
+  );
+}
+
+function ProjectsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data: projects } = useProjects();
+  const [name, setName] = useState("");
+  const [deleting, setDeleting] = useState<Project | null>(null);
+  const create = useApiMutation(() => api("/projects", { method: "POST", body: { name } }), {
+    invalidate: [keys.projects],
+    onSuccess: () => setName(""),
+  });
+  const update = useApiMutation((v: { id: string; status: Project["status"] }) => api(`/projects/${v.id}`, { method: "PATCH", body: { status: v.status } }), {
+    invalidate: [keys.projects],
+  });
+  const remove = useApiMutation((id: string) => api(`/projects/${id}`, { method: "DELETE" }), {
+    invalidate: [keys.projects, keys.tasks, ["notes"]],
+    success: "Project deleted",
+    onSuccess: () => setDeleting(null),
+  });
+  return (
+    <>
+      <Dialog open={open && !deleting} onClose={onClose} title="Projects">
+        <p className="mb-4 text-sm text-fg-muted">Lightweight projects group tasks and notes and give Talorys context.</p>
+        <form
+          className="mb-4 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) create.mutate(undefined);
+          }}
+        >
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New project name" maxLength={200} aria-label="Project name" />
+          <Button type="submit" loading={create.isPending} disabled={!name.trim()}>
+            Add
+          </Button>
+        </form>
+        {!projects?.length ? (
+          <p className="py-4 text-center text-sm text-fg-subtle">No projects yet.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {projects.map((p) => (
+              <li key={p.id} className="flex items-center gap-2 py-2">
+                <span className="min-w-0 flex-1 truncate text-sm">{p.name}</span>
+                <Select value={p.status} onChange={(e) => update.mutate({ id: p.id, status: e.target.value as Project["status"] })} className="h-8 w-32 text-xs" aria-label={`Status of ${p.name}`}>
+                  <option value="active">Active</option>
+                  <option value="paused">Paused</option>
+                  <option value="completed">Completed</option>
+                  <option value="archived">Archived</option>
+                </Select>
+                <Button variant="ghost" size="icon" onClick={() => setDeleting(p)} aria-label={`Delete ${p.name}`}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Dialog>
+      <ConfirmDialog
+        open={!!deleting}
+        title="Delete project?"
+        message={`“${deleting?.name}” will be deleted. Its tasks and notes are kept and simply unassigned.`}
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => deleting && remove.mutate(deleting.id)}
+        loading={remove.isPending}
+      />
+    </>
+  );
+}

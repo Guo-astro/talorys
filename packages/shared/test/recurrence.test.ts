@@ -1,0 +1,65 @@
+import { describe, expect, it } from "vitest";
+import { computeNextRun, describeSchedule, scheduleSpecSchema, zonedTimeToUtc, getZonedParts } from "../src/recurrence";
+
+const NY = "America/New_York";
+
+describe("zonedTimeToUtc", () => {
+  it("converts ordinary wall times", () => {
+    expect(zonedTimeToUtc(2026, 7, 1, 9, 0, NY).toISOString()).toBe("2026-07-01T13:00:00.000Z"); // EDT -4
+    expect(zonedTimeToUtc(2026, 1, 15, 9, 0, NY).toISOString()).toBe("2026-01-15T14:00:00.000Z"); // EST -5
+    expect(zonedTimeToUtc(2026, 1, 15, 9, 0, "Asia/Tokyo").toISOString()).toBe("2026-01-15T00:00:00.000Z");
+  });
+
+  it("moves non-existent times (spring forward) past the gap", () => {
+    // 2026-03-08 02:30 does not exist in New York; it runs at 03:30 EDT.
+    const t = zonedTimeToUtc(2026, 3, 8, 2, 30, NY);
+    expect(t.toISOString()).toBe("2026-03-08T07:30:00.000Z");
+    expect(getZonedParts(t, NY)).toMatchObject({ hour: 3, minute: 30 });
+  });
+
+  it("uses the first occurrence for ambiguous times (fall back)", () => {
+    // 2026-11-01 01:30 happens twice; the earlier (EDT) instant wins.
+    expect(zonedTimeToUtc(2026, 11, 1, 1, 30, NY).toISOString()).toBe("2026-11-01T05:30:00.000Z");
+  });
+});
+
+describe("computeNextRun", () => {
+  it("daily schedules keep their wall-clock time across DST", () => {
+    const spec = { type: "daily", time: "09:00" } as const;
+    const before = computeNextRun(spec, NY, new Date("2026-03-07T15:00:00Z"))!; // after 9am EST on Mar 7
+    expect(before.toISOString()).toBe("2026-03-08T13:00:00.000Z"); // 9am EDT on Mar 8
+    const after = computeNextRun(spec, NY, before)!;
+    expect(after.toISOString()).toBe("2026-03-09T13:00:00.000Z");
+  });
+
+  it("weekly schedules pick the next matching weekday", () => {
+    // 2026-10-09 is a Friday.
+    const next = computeNextRun({ type: "weekly", days: [5], time: "17:00" }, "UTC", new Date("2026-10-09T18:00:00Z"))!;
+    expect(next.toISOString()).toBe("2026-10-16T17:00:00.000Z");
+    const same = computeNextRun({ type: "weekly", days: [5], time: "17:00" }, "UTC", new Date("2026-10-09T08:00:00Z"))!;
+    expect(same.toISOString()).toBe("2026-10-09T17:00:00.000Z");
+  });
+
+  it("monthly schedules clamp to the last day of short months", () => {
+    const next = computeNextRun({ type: "monthly", day: 31, time: "08:00" }, "UTC", new Date("2027-02-01T00:00:00Z"))!;
+    expect(next.toISOString()).toBe("2027-02-28T08:00:00.000Z");
+  });
+
+  it("one-time schedules fire once and then never again", () => {
+    const spec = { type: "once", at: "2026-12-24T18:00" } as const;
+    const first = computeNextRun(spec, "Europe/Berlin", new Date("2026-12-01T00:00:00Z"))!;
+    expect(first.toISOString()).toBe("2026-12-24T17:00:00.000Z");
+    expect(computeNextRun(spec, "Europe/Berlin", first)).toBeNull();
+  });
+
+  it("interval schedules add minutes", () => {
+    expect(computeNextRun({ type: "interval", minutes: 90 }, "UTC", new Date("2026-01-01T00:00:00Z"))!.toISOString()).toBe("2026-01-01T01:30:00.000Z");
+  });
+
+  it("validates specs", () => {
+    expect(scheduleSpecSchema.safeParse({ type: "interval", minutes: 5 }).success).toBe(false);
+    expect(scheduleSpecSchema.safeParse({ type: "daily", time: "25:00" }).success).toBe(false);
+    expect(scheduleSpecSchema.safeParse({ type: "weekly", days: [], time: "09:00" }).success).toBe(false);
+    expect(describeSchedule({ type: "weekly", days: [1, 3], time: "09:00" })).toBe("Every Monday, Wednesday at 09:00");
+  });
+});

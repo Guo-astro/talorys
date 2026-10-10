@@ -1,0 +1,38 @@
+import { Hono } from "hono";
+import type { TalorysAgent } from "../agent/talorys-agent";
+import type { Env } from "../env";
+import { errorResponse, NotFoundError } from "./errors";
+import { csrfProtection, requireSession, securityHeaders } from "./middleware";
+import { authRoutes } from "./routes/auth";
+import { chatRoutes } from "./routes/chat";
+import { dataRoutes } from "./routes/data";
+import { automationRoutes } from "./routes/automations";
+import { systemRoutes } from "./routes/system";
+
+export interface AppEnv {
+  Bindings: { agent: TalorysAgent; env: Env };
+  Variables: { sessionId: string | null };
+}
+
+/**
+ * The private HTTP API. It runs inside the owner's Durable Object, next to the
+ * SQLite database it serves, so no data ever leaves the private backend.
+ */
+export function createApi() {
+  const app = new Hono<AppEnv>().basePath("/api");
+
+  app.onError((err) => errorResponse(err));
+  app.notFound(() => errorResponse(new NotFoundError("Unknown API route")));
+
+  app.use("*", securityHeaders);
+  app.use("*", csrfProtection);
+  app.use("*", requireSession);
+
+  app.route("/", systemRoutes);
+  app.route("/auth", authRoutes);
+  app.route("/", chatRoutes);
+  app.route("/", dataRoutes);
+  app.route("/", automationRoutes);
+
+  return app;
+}
