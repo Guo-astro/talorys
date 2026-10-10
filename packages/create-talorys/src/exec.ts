@@ -5,7 +5,10 @@ export interface ExecOptions {
   env?: Record<string, string | undefined>;
   /** Written to stdin, then stdin is closed. Never logged. */
   input?: string;
-  /** Inherit the terminal (for interactive flows such as browser login). */
+  /**
+   * Show output live (for flows such as browser login). stdin is ignored so
+   * Wrangler sees no TTY and never blocks on its own unrelated prompts.
+   */
   interactive?: boolean;
   timeoutMs?: number;
 }
@@ -27,7 +30,7 @@ export const exec: Exec = (command, args, opts = {}) =>
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: { ...process.env, ...opts.env } as NodeJS.ProcessEnv,
-      stdio: opts.interactive ? "inherit" : ["pipe", "pipe", "pipe"],
+      stdio: opts.interactive ? ["ignore", "inherit", "inherit"] : ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
     });
