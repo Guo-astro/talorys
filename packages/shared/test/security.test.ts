@@ -21,7 +21,10 @@ describe("password hashing", () => {
     expect(hash).not.toContain("Sunny");
     expect(await verifyPassword("Sunny-Garden-42", hash)).toBe(true);
     expect(await verifyPassword("sunny-garden-42", hash)).toBe(false);
-    expect(await verifyPassword("Sunny-Garden-42", hash.replace(/.$/, (c) => (c === "A" ? "B" : "A")))).toBe(false);
+    // Tamper the first hash character: the last one partly holds base64 padding bits.
+    const sep = hash.lastIndexOf("$") + 1;
+    const tampered = hash.slice(0, sep) + (hash[sep] === "A" ? "B" : "A") + hash.slice(sep + 1);
+    expect(await verifyPassword("Sunny-Garden-42", tampered)).toBe(false);
     expect(await verifyPassword("x", "plaintext")).toBe(false);
     expect(await verifyPassword("x", "pbkdf2-sha256$1$abc$def")).toBe(false); // too few iterations
   });
