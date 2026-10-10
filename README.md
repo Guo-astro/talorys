@@ -14,9 +14,6 @@ One person. One Cloudflare account. One command. One personal AI agent.
 npx create-talorys@latest
 ```
 
-> This command works once the `create-talorys` package is published to npm.
-> Until then, see [Local development](#8-local-development) to run it from source.
-
 ---
 
 ## 1. What Talorys is
