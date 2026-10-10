@@ -24,7 +24,8 @@
     "test:shared": "vitest run --root packages/shared",
     "test:e2e": "playwright test",
     "test:pack": "npm run test:pack -w create-talorys",
-    "test:smoke": "node tests/smoke/real-deploy.mjs"
+    "test:smoke": "node tests/smoke/real-deploy.mjs",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

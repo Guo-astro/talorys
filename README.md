@@ -25,6 +25,16 @@ npx create-talorys@latest
 - **Single-user by design** — no signup, no accounts, no teams. The installer sets the owner password.
 - **Works without AI** — tasks, notes, memories and reminders keep working if Workers AI is unavailable or your free quota is used up.
 
+### Screenshots
+
+| Chat with tool activity | Tasks |
+| --- | --- |
+| ![Chat](docs/screenshots/chat.png) | ![Tasks](docs/screenshots/tasks.png) |
+| **Memory (dark mode)** | **Automations** |
+| ![Memory](docs/screenshots/memory.png) | ![Automations](docs/screenshots/automations.png) |
+
+<p align="center"><img src="docs/screenshots/mobile.png" alt="Mobile" width="260"> &nbsp; <img src="docs/screenshots/login.png" alt="Login" width="520"></p>
+
 ## 2. How it works
 
 ```
