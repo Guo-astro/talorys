@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import type { Note, Project } from "@talorys/shared";
-import { ArrowLeft, Eye, FolderKanban, NotebookPen, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, CircleCheck, Crosshair, Eye, FolderKanban, ListTodo, NotebookPen, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { Markdown } from "../components/Markdown";
-import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorNotice, Input, Select, Spinner, Textarea } from "../components/ui";
+import { WriterEditor, type WriterHandle, taskStats, toggleTaskLine } from "../components/WriterEditor";
+import { Badge, Button, ConfirmDialog, Dialog, EmptyState, ErrorNotice, Input, Select, Spinner } from "../components/ui";
 import { keys, useApiMutation, useNotes, useProjects } from "../hooks/queries";
 import { api } from "../lib/api";
 import { cn, relativeTime } from "../lib/utils";
@@ -60,7 +61,9 @@ export default function NotesPage() {
             </EmptyState>
           ) : (
             <ul className="space-y-0.5">
-              {notes.map((n) => (
+              {notes.map((n) => {
+                const tasks = taskStats(n.content);
+                return (
                 <li key={n.id}>
                   <button type="button"
                     onClick={() => navigate(`/notes/${n.id}`)}
@@ -69,14 +72,23 @@ export default function NotesPage() {
                       n.id === noteId ? "bg-muted" : "hover:bg-muted/60",
                     )}
                   >
-                    <p className="truncate text-sm font-medium">{n.title}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="min-w-0 flex-1 truncate text-sm font-medium">{n.title}</p>
+                      {tasks.total > 0 && (
+                        <span className={cn("flex shrink-0 items-center gap-1 text-[11px] tabular-nums", tasks.done === tasks.total ? "text-success" : "text-fg-subtle")}>
+                          <CircleCheck className="h-3 w-3" />
+                          {tasks.done}/{tasks.total}
+                        </span>
+                      )}
+                    </div>
                     <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-fg-subtle">
                       {relativeTime(n.updated_at)}
                       {n.content ? ` · ${n.content.replace(/[#*_`>\-[\]]/g, "").slice(0, 120)}` : ""}
                     </p>
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>
@@ -104,8 +116,16 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
   const [content, setContent] = useState("");
   const [projectId, setProjectId] = useState("");
   const [mode, setMode] = useState<"edit" | "preview">(() => (new URLSearchParams(location.search).get("edit") ? "edit" : "preview"));
+  const [focusMode, setFocusMode] = useState(() => localStorage.getItem("talorys.notes.focus") === "1");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<WriterHandle>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("talorys.notes.focus", focusMode ? "1" : "0");
+    } catch {}
+  }, [focusMode]);
 
   useEffect(() => {
     api<{ note: Note }>(`/notes/${id}`)
@@ -123,8 +143,19 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
 
   const save = useApiMutation(
     () => api<{ note: Note }>(`/notes/${id}`, { method: "PATCH", body: { title: title.trim() || "Untitled", content, project_id: projectId || null } }),
-    { invalidate: [["notes"]], success: "Note saved", onSuccess: (r) => setNote(r.note) },
+    { invalidate: [["notes"]], onSuccess: (r) => setNote(r.note) },
   );
+
+  // Autosave shortly after typing stops.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    if (!dirty || save.isPending) return;
+    const t = setTimeout(() => saveRef.current.mutate(undefined), 1000);
+    return () => clearTimeout(t);
+  }, [dirty, title, content, projectId, save.isPending]);
+
+  const toggleTask = useCallback((line: number) => setContent((c) => toggleTaskLine(c, line)), []);
   const remove = useApiMutation(() => api(`/notes/${id}`, { method: "DELETE" }), {
     invalidate: [["notes"]],
     success: "Note deleted",
@@ -162,13 +193,23 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
           </Button>
           <div className="flex rounded-lg bg-muted p-0.5">
             <button type="button" onClick={() => setMode("edit")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium", mode === "edit" ? "bg-surface shadow-sm" : "text-fg-muted")}>
-              <Pencil className="h-3 w-3" /> Edit
+              <Pencil className="h-3 w-3" /> Write
             </button>
             <button type="button" onClick={() => setMode("preview")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium", mode === "preview" ? "bg-surface shadow-sm" : "text-fg-muted")}>
               <Eye className="h-3 w-3" /> Preview
             </button>
           </div>
-          {dirty && <Badge tone="warning">Unsaved</Badge>}
+          {mode === "edit" && (
+            <>
+              <Button variant="ghost" size="icon" onClick={() => setFocusMode((f) => !f)} aria-label="Focus mode" aria-pressed={focusMode} title="Focus mode — dim everything but the current paragraph" className={cn(focusMode && "text-accent")}>
+                <Crosshair className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" onClick={() => editorRef.current?.insertTask()} aria-label="Add todo" title="Add todo (⌘↵ toggles the current line)">
+                <ListTodo className="h-4 w-4" />
+              </Button>
+            </>
+          )}
+          {save.isPending ? <span className="text-xs text-fg-subtle">Saving…</span> : dirty ? <Badge tone="warning">Unsaved</Badge> : <span className="hidden text-xs text-fg-subtle sm:inline">Saved</span>}
         </div>
         <div className="flex items-center gap-1">
           <Select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="h-8 w-36 text-xs" aria-label="Project">
@@ -188,7 +229,7 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-3xl px-5 py-6 md:px-8">
+        <div className="mx-auto w-full max-w-[44rem] px-5 py-8 md:px-8 md:py-14">
           <input
             ref={titleRef}
             value={title}
@@ -198,18 +239,21 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
             aria-label="Note title"
             className="w-full bg-transparent text-2xl font-semibold tracking-tight placeholder:text-fg-subtle focus:outline-none"
           />
-          <p className="mt-1 text-xs text-fg-subtle">Edited {relativeTime(note.updated_at)}</p>
+          <NoteMeta content={content} updatedAt={note.updated_at} />
           <div className="mt-6">
             {mode === "edit" ? (
-              <Textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="Write in Markdown…"
-                aria-label="Note content"
-                className="min-h-[50vh] resize-y border-none bg-transparent px-0 font-mono text-sm shadow-none focus:ring-0"
-              />
+              <div className="min-h-[55vh] cursor-text pb-[30vh]" onClick={(e) => e.target === e.currentTarget && editorRef.current?.focus()}>
+                <WriterEditor
+                  ref={editorRef}
+                  value={content}
+                  onChange={setContent}
+                  focusMode={focusMode}
+                  placeholder="Start writing…  (- [ ] makes a todo, ⌘↵ toggles it)"
+                  aria-label="Note content"
+                />
+              </div>
             ) : content ? (
-              <Markdown content={content} />
+              <Markdown content={content} onToggleTask={toggleTask} />
             ) : (
               <p className="text-sm text-fg-subtle">Empty note.</p>
             )}
@@ -224,6 +268,26 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
         onConfirm={() => remove.mutate(undefined)}
         loading={remove.isPending}
       />
+    </div>
+  );
+}
+
+function NoteMeta({ content, updatedAt }: { content: string; updatedAt: string }) {
+  const words = content.trim() ? content.trim().split(/\s+/).length : 0;
+  const tasks = taskStats(content);
+  const pct = tasks.total ? Math.round((tasks.done / tasks.total) * 100) : 0;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-subtle">
+      <span>Edited {relativeTime(updatedAt)}</span>
+      <span>{words} {words === 1 ? "word" : "words"} · {Math.max(1, Math.round(words / 230))} min read</span>
+      {tasks.total > 0 && (
+        <span className="flex items-center gap-2">
+          <span className="h-1 w-16 overflow-hidden rounded-full bg-muted">
+            <span className="block h-full rounded-full bg-success transition-all" style={{ width: `${pct}%` }} />
+          </span>
+          {tasks.done}/{tasks.total} done
+        </span>
+      )}
     </div>
   );
 }

@@ -90,6 +90,28 @@ test.describe("Talorys owner experience", () => {
     await expect(page.getByRole("button", { name: /e2e Packing list/ })).toBeVisible();
   });
 
+  test("notes support todos that can be toggled", async ({ page }) => {
+    await login(page);
+    await page.getByRole("link", { name: "Notes" }).first().click();
+    await page.getByRole("button", { name: "New note" }).click();
+    await page.getByLabel("Note title").fill("e2e Errands");
+    const editor = page.getByLabel("Note content");
+    await editor.click();
+    await page.getByRole("button", { name: "Add todo" }).click();
+    await page.keyboard.type("buy milk");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("call mom");
+    await expect(editor).toHaveValue("- [ ] buy milk\n- [ ] call mom");
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(editor).toHaveValue("- [ ] buy milk\n- [x] call mom");
+    await page.screenshot({ path: "test-results/notes-writer.png" });
+    await page.getByRole("button", { name: "Preview" }).click();
+    await page.getByRole("checkbox", { name: "Mark as done" }).click();
+    await expect(page.getByRole("checkbox", { name: "Mark as not done" })).toHaveCount(2);
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /e2e Errands.*2\/2/ })).toBeVisible();
+  });
+
   test("automations can be scheduled, paused and deleted", async ({ page }) => {
     await login(page);
     await page.getByRole("link", { name: "Automations" }).first().click();

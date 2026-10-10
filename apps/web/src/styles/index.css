@@ -139,6 +139,38 @@ select:focus-visible {
 .prose-talorys hr { @apply border-border; }
 .prose-talorys input[type="checkbox"] { @apply mr-1.5 align-middle; }
 
+.prose-talorys li.task-list-item { @apply list-none -ml-5 transition-colors; }
+.prose-talorys li.task-list-item input[type="checkbox"] { @apply h-4 w-4 cursor-pointer accent-[var(--accent)] mr-2 -mt-0.5; }
+.prose-talorys li.task-done { @apply text-fg-subtle line-through decoration-fg-subtle/60; }
+
+/* Markdown editor: textarea and highlighted mirror must share metrics exactly. */
+.writer-layer {
+  font-family: "iA Writer Duo", "iA Writer Mono", var(--font-mono);
+  font-size: 17px;
+  line-height: 1.75;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  tab-size: 2;
+  padding: 0;
+  border: 0;
+  font-weight: 400;
+}
+@media (max-width: 640px) { .writer-layer { font-size: 15px; } }
+.writer strong { font-weight: 700; }
+.writer-layer .w-mark { color: var(--fg-subtle); opacity: 0.55; font-weight: 400; }
+.writer-layer .w-heading { font-weight: 700; }
+.writer-layer .w-bullet { color: var(--fg-subtle); }
+.writer-layer .w-quote { color: var(--fg-muted); font-style: italic; }
+.writer-layer .w-code { background: var(--muted); border-radius: 3px; }
+.writer-layer .w-code-block { color: var(--fg-muted); }
+.writer-layer .w-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.writer-layer .w-tag { color: var(--accent); }
+.writer-layer .w-box { color: var(--accent); font-weight: 700; }
+.writer-layer .w-done { color: var(--fg-subtle); }
+.writer-layer .w-done .w-box { color: var(--success); }
+
 .scrollbar-thin { scrollbar-width: thin; }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
@@ -48,11 +48,36 @@ const components: Components = {
   img: ({ alt }) => <span className="text-fg-subtle">[image: {alt}]</span>,
 };
 
+/** Task list items with clickable checkboxes; `line` is the 0-based source line. */
+function taskComponents(onToggleTask: (line: number) => void): Components {
+  return {
+    ...components,
+    input: ({ checked, type }) =>
+      type === "checkbox" ? <input type="checkbox" checked={!!checked} readOnly aria-label={checked ? "Mark as not done" : "Mark as done"} /> : null,
+    li: ({ node, className, children }) => {
+      const line = (node?.position?.start.line ?? 0) - 1;
+      const isTask = className?.includes("task-list-item");
+      const done = isTask && node?.children.some((c) => c.type === "element" && c.tagName === "input" && c.properties?.checked);
+      return (
+        <li
+          className={cn(className, done && "task-done")}
+          onClick={isTask ? (e) => {
+            if ((e.target as HTMLElement).tagName === "INPUT") onToggleTask(line);
+          } : undefined}
+        >
+          {children}
+        </li>
+      );
+    },
+  };
+}
+
 /** Safe Markdown renderer: raw HTML is not rendered (react-markdown default). */
-export const Markdown = memo(function Markdown({ content, compact }: { content: string; compact?: boolean }) {
+export const Markdown = memo(function Markdown({ content, compact, onToggleTask }: { content: string; compact?: boolean; onToggleTask?: (line: number) => void }) {
+  const comps = useMemo(() => (onToggleTask ? taskComponents(onToggleTask) : components), [onToggleTask]);
   return (
     <div className={cn("prose-talorys", compact && "text-sm leading-6")}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} skipHtml>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={comps} skipHtml>
         {content}
       </ReactMarkdown>
     </div>
