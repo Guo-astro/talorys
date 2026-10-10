@@ -1,6 +1,6 @@
 # create-talorys
 
-Deploy [Talorys](https://github.com/talorys/talorys) — a private, single-user AI
+Deploy [Talorys](https://github.com/rociiu/talorys) — a private, single-user AI
 agent — into **your own Cloudflare account** with one command:
 
 ```bash

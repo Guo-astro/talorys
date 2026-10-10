@@ -8,7 +8,7 @@
   "files": ["dist", "templates", "README.md", "LICENSE"],
   "engines": { "node": ">=20.18" },
   "keywords": ["cloudflare", "ai-agent", "personal-assistant", "workers", "durable-objects", "self-hosted"],
-  "repository": { "type": "git", "url": "git+https://github.com/talorys/talorys.git", "directory": "packages/create-talorys" },
+  "repository": { "type": "git", "url": "git+https://github.com/rociiu/talorys.git", "directory": "packages/create-talorys" },
   "scripts": {
     "build": "tsup && node scripts/build-templates.mjs",
     "typecheck": "tsc --noEmit -p .",

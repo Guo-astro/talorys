@@ -18,7 +18,7 @@ export const DEV_SESSION_COOKIE = "talorys_session";
 /** Header sent by the SPA on every API call. Simple-request CSRF can't set custom headers. */
 export const CSRF_HEADER = "x-talorys-request";
 
-export const GITHUB_URL = "https://github.com/talorys/talorys";
+export const GITHUB_URL = "https://github.com/rociiu/talorys";
 
 export const DEFAULT_LIMITS = {
   maxOutputTokens: 1024,

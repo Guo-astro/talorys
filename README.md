@@ -155,7 +155,7 @@ Simple reminders and task digests never use AI. The Usage panel shows local
 Requirements: Node.js 20.18+.
 
 ```bash
-git clone https://github.com/talorys/talorys.git
+git clone https://github.com/rociiu/talorys.git
 cd talorys
 npm install
 npm run dev
