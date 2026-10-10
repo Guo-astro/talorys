@@ -14,6 +14,12 @@ binding, verifies the live deployment and prints your `pages.dev` URL.
 
 It ships its own Wrangler and prebuilt artifacts, so no build tools are needed.
 
+| Chat | Tasks |
+| --- | --- |
+| ![Chat](https://raw.githubusercontent.com/rociiu/talorys/main/docs/screenshots/chat.png) | ![Tasks](https://raw.githubusercontent.com/rociiu/talorys/main/docs/screenshots/tasks.png) |
+| **Memory** | **Automations** |
+| ![Memory](https://raw.githubusercontent.com/rociiu/talorys/main/docs/screenshots/memory.png) | ![Automations](https://raw.githubusercontent.com/rociiu/talorys/main/docs/screenshots/automations.png) |
+
 ## Commands
 
 | Command | Description |

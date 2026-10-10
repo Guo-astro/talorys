@@ -1,14 +1,34 @@
 {
   "name": "create-talorys",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deploy Talorys — your personal AI agent — into your own Cloudflare account with one command.",
   "license": "MIT",
   "type": "module",
-  "bin": { "create-talorys": "dist/cli.js" },
-  "files": ["dist", "templates", "README.md", "LICENSE"],
-  "engines": { "node": ">=20.18" },
-  "keywords": ["cloudflare", "ai-agent", "personal-assistant", "workers", "durable-objects", "self-hosted"],
-  "repository": { "type": "git", "url": "git+https://github.com/rociiu/talorys.git", "directory": "packages/create-talorys" },
+  "bin": {
+    "create-talorys": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.18"
+  },
+  "keywords": [
+    "cloudflare",
+    "ai-agent",
+    "personal-assistant",
+    "workers",
+    "durable-objects",
+    "self-hosted"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rociiu/talorys.git",
+    "directory": "packages/create-talorys"
+  },
   "scripts": {
     "build": "tsup && node scripts/build-templates.mjs",
     "typecheck": "tsc --noEmit -p .",
