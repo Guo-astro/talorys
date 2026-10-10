@@ -12,7 +12,7 @@ async function login(page: Page) {
 test.describe("Talorys owner experience", () => {
   test("login rejects a wrong password and has no signup", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Talorys" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Talorys", exact: true })).toBeVisible();
     await expect(page.getByText(/sign ?up|register|create account/i)).toHaveCount(0);
     await page.getByPlaceholder("Owner password").fill("definitely-wrong-1");
     await page.getByRole("button", { name: "Unlock" }).click();
@@ -114,7 +114,7 @@ test.describe("Talorys owner experience", () => {
     await expect(page.getByLabel("Model id")).toHaveValue("@cf/zai-org/glm-4.7-flash");
     await expect(page.getByText("Estimates, not billing data")).toBeVisible();
     await page.getByRole("tab", { name: "Security" }).click();
-    await expect(page.getByText("This device")).toBeVisible();
+    await expect(page.getByText("This device", { exact: true })).toBeVisible();
     await page.getByRole("tab", { name: "Privacy" }).click();
     await expect(page.getByRole("link", { name: "Download backup" })).toHaveAttribute("href", "/api/export");
   });
@@ -133,9 +133,9 @@ test.describe("Talorys owner experience", () => {
     const nav = page.getByRole("navigation", { name: "Main" }).last();
     await expect(nav).toBeVisible();
     await nav.getByRole("link", { name: "Tasks" }).click();
-    await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tasks", exact: true })).toBeVisible();
     await nav.getByRole("link", { name: "Schedules" }).click();
-    await expect(page.getByRole("heading", { name: "Automations" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Automations", exact: true })).toBeVisible();
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(width).toBeLessThanOrEqual(page.viewportSize()!.width);
   });
