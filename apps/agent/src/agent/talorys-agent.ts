@@ -65,6 +65,14 @@ export class TalorysAgent extends Agent<Env, AgentState> {
     return api.fetch(request, { agent: this, env: this.env });
   }
 
+  /**
+   * Talorys has no sub-agents. Without this, the SDK forwards any `/sub/{class}/{name}/...`
+   * request to a fresh facet with its own empty database, bypassing login rate limits.
+   */
+  override async onBeforeSubAgent(): Promise<Response> {
+    return Response.json({ error: { code: "NOT_FOUND", message: "Not found" } }, { status: 404 });
+  }
+
   /** Chooses the AI provider. The mock is only used in local development or explicit demo mode. */
   aiProvider(): AIProvider | null {
     const settings = this.services.settings.get();

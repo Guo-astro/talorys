@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { client, freshIp, inAgent, loggedIn, password } from "./helpers";
+import { agentStub, BASE, client, freshIp, inAgent, loggedIn, password } from "./helpers";
 
 const PRIVATE_ROUTES: [string, string][] = [
   ["GET", "/api/conversations"],
@@ -111,6 +111,25 @@ describe("brute-force protection", () => {
     });
     expect((await client().call("/api/auth/login", { method: "POST", body: { password: password() } })).status).toBe(429);
     await inAgent((a) => a.services.db.run(`DELETE FROM tal_login_attempts`));
+  });
+
+  it("refuses Agents SDK sub-agent routes at the Worker", async () => {
+    const c = client();
+    for (const path of ["/api/sub/talorys-agent/x/api/auth/login", "/api/sub/talorys-agent/x/api/health", "/api/tasks/sub/talorys-agent/x"]) {
+      expect((await c.call(path, { method: "POST", body: { password: password() } })).status).toBe(404);
+    }
+  });
+
+  it("refuses sub-agent routes inside the agent, where each would get its own empty rate-limit table", async () => {
+    const stub = await agentStub();
+    const res = await stub.fetch(
+      new Request(`${BASE}/api/sub/talorys-agent/x/api/auth/login`, {
+        method: "POST",
+        headers: { "cf-connecting-ip": freshIp(), "x-talorys-request": "1", origin: BASE, "content-type": "application/json" },
+        body: JSON.stringify({ password: password() }),
+      }),
+    );
+    expect(res.status).toBe(404);
   });
 });
 
