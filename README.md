@@ -183,7 +183,9 @@ Other scripts: `npm run build`, `npm test`, `npm run test:e2e`, `npm run test:pa
 **Settings → Privacy → Download backup** produces `talorys-backup.json` with
 conversations, memories, tasks, notes, projects, settings and automations
 (never sessions or credentials). **Import** validates the file and merges it in
-one transaction; importing the same backup twice is harmless.
+one transaction; importing the same backup twice is harmless. Settings include
+the effective installer defaults. If an imported timezone changes, retained
+local automations are also rescheduled in that timezone.
 
 ## 10. Update
 
