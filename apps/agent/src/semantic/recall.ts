@@ -18,6 +18,14 @@ export const RRF_K = 60;
 export const LAZY_INDEX_BATCH = 50;
 /** Appended after two or more recalled memories so the model resolves a conflict by recency. */
 export const NEWER_WINS_NOTE = "If two memories conflict, the more recently saved one is current.";
+/**
+ * Stored-vector cosine at which a newer memory is pulled in beside a selected one. Measured on
+ * bge-small: Bug/Tesla 0.72-0.79 and Portland/Denver 0.748 pull in; Porsche/Bug 0.523,
+ * Porsche/Tesla 0.589 and vegetarian/jazz 0.684 do not.
+ */
+export const NEWER_DUPLICATE_COSINE = 0.7;
+/** Most newer near-duplicates one selected memory pulls in. */
+export const MAX_NEWER_PER_HIT = 2;
 
 /** Everything one recall needs: the indexer context plus the owner's services. */
 export interface SemanticContext extends IndexerContext {
@@ -117,11 +125,72 @@ export async function hybridSearch(ctx: SemanticContext, query: string, opts: { 
       compareDesc(a.memory.updated_at, b.memory.updated_at) ||
       compareAsc(a.memory.id, b.memory.id),
   );
-  return hits.slice(0, Math.max(0, opts.limit));
+  return pullInNewer(ctx, hits.slice(0, Math.max(0, opts.limit)), opts.limit);
 }
 
 const compareAsc = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const compareDesc = (a: string, b: string) => compareAsc(b, a);
+
+/** True when `a` was saved strictly after `b`: a later update, or the same update and a later creation. */
+const isNewer = (a: Memory, b: Memory) =>
+  compareAsc(a.updated_at, b.updated_at) > 0 || (a.updated_at === b.updated_at && compareAsc(a.created_at, b.created_at) > 0);
+
+/**
+ * After selection, each selected hit pulls in up to MAX_NEWER_PER_HIT newer memories whose
+ * stored vector is within NEWER_DUPLICATE_COSINE of its own, so a superseded fact never reaches
+ * the model without its replacement. Pulled memories sit right after their puller with its fused
+ * score and never pull further. A full list drops its weakest non-pulled hit that pulled nothing;
+ * when there is none the pull is skipped. Uses stored vectors only: no embedder calls.
+ */
+export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: number): RecallHit[] {
+  const out = hits.slice(0, Math.max(0, limit));
+  if (out.length === 0) return out;
+  const vectors = new Map<string, Float32Array>();
+  for (const row of ctx.db.all<{ memory_id: string; vector: string }>(
+    `SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ?`,
+    ctx.embedder?.model ?? ctx.config.model,
+  )) {
+    vectors.set(row.memory_id, decodeVector(row.vector));
+  }
+  const seen = new Set(out.map((h) => h.memory.id));
+  const pulled = new Set<RecallHit>();
+  const pullers = new Set<RecallHit>();
+  for (const puller of [...out]) {
+    const own = vectors.get(puller.memory.id);
+    if (!own || !out.includes(puller)) continue;
+    const candidates: { memory: Memory; cosine: number }[] = [];
+    for (const [id, vector] of vectors) {
+      if (seen.has(id)) continue;
+      const c = cosine(own, vector);
+      if (c < NEWER_DUPLICATE_COSINE) continue;
+      const memory = ctx.services.memories.get(id);
+      if (memory && isNewer(memory, puller.memory)) candidates.push({ memory, cosine: c });
+    }
+    candidates.sort((a, b) => b.cosine - a.cosine || compareAsc(a.memory.id, b.memory.id));
+    let at = out.indexOf(puller) + 1;
+    for (const { memory } of candidates.slice(0, MAX_NEWER_PER_HIT)) {
+      if (out.length >= limit) {
+        let drop = -1;
+        for (let i = out.length - 1; i >= 0; i--) {
+          const h = out[i]!;
+          if (h !== puller && !pulled.has(h) && !pullers.has(h)) {
+            drop = i;
+            break;
+          }
+        }
+        if (drop < 0) break;
+        out.splice(drop, 1);
+        if (drop < at) at--;
+      }
+      const hit: RecallHit = { memory, cosine: null, fused: puller.fused };
+      out.splice(at++, 0, hit);
+      seen.add(memory.id);
+      pulled.add(hit);
+      pullers.add(puller);
+    }
+  }
+  return out;
+}
 
 /** `YYYY-MM-DD` of `iso` in `timeZone`, falling back to UTC for an unknown zone. */
 export function savedDate(iso: string, timeZone: string): string {

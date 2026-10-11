@@ -3,12 +3,22 @@ import { describe, expect, it, vi } from "vitest";
 import { inAgent } from "./helpers";
 import { invalidateSemanticCache } from "../src/semantic";
 import { DEFAULT_SEMANTIC_CONFIG, type SemanticConfig, deleteSemanticConfig } from "../src/semantic/config";
-import { type Embedder, MockEmbedder, embeddingsToday } from "../src/semantic/embeddings";
+import {
+  EMBEDDING_DIMS,
+  type Embedder,
+  MockEmbedder,
+  contentHash,
+  embeddingText,
+  embeddingsToday,
+  encodeVector,
+} from "../src/semantic/embeddings";
 import { runIndexer } from "../src/semantic/indexer";
-import { dropSemanticData } from "../src/semantic/migrations";
+import { dropSemanticData, ensureSemanticSchema } from "../src/semantic/migrations";
 import { estimateTokens } from "../src/ai/provider";
 import {
+  MAX_NEWER_PER_HIT,
   MAX_RELEVANT_MEMORIES,
+  NEWER_DUPLICATE_COSINE,
   NEWER_WINS_NOTE,
   type SemanticContext,
   applyM1,
@@ -18,6 +28,8 @@ import {
   selectSemanticMemories,
 } from "../src/semantic/recall";
 import { UsageService } from "../src/services/usage";
+import { semanticTools } from "../src/semantic/tools";
+import type { ToolContext } from "../src/tools";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
 
 /** Clears memories and semantic state and returns an enabled context with a spied mock embedder. */
@@ -43,6 +55,53 @@ function memory(id: string, updated_at: string, created_at = updated_at, content
 
 const setUpdated = (a: TalorysAgent, id: string, iso: string) =>
   a.services.db.run(`UPDATE tal_memories SET updated_at = ?, created_at = ? WHERE id = ?`, iso, iso, id);
+
+/** Pads a short coordinate list to a full embedding. */
+function vec(coords: number[]): Float32Array {
+  const v = new Float32Array(EMBEDDING_DIMS);
+  v.set(coords);
+  return v;
+}
+
+/** Unit vector at `cos` to the first axis, off along axis `k`: two such vectors meet at cos1 * cos2. */
+const near = (cos: number, k: number) => {
+  const coords = new Array<number>(k + 1).fill(0);
+  coords[0] = cos;
+  coords[k] = Math.sqrt(1 - cos * cos);
+  return vec(coords);
+};
+
+/** Unit vectors whose pairwise cosines are `gram` (Cholesky of the Gram matrix). */
+function fromGram(gram: number[][]): Float32Array[] {
+  const n = gram.length;
+  const l = gram.map(() => new Array<number>(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= i; j++) {
+      let sum = gram[i]![j]!;
+      for (let k = 0; k < j; k++) sum -= l[i]![k]! * l[j]![k]!;
+      l[i]![j] = i === j ? Math.sqrt(sum) : sum / l[j]![j]!;
+    }
+  }
+  return l.map(vec);
+}
+
+/** Returns `query` for every text; spied so a test can count calls. */
+function stubEmbedder(model: string, query: Float32Array): Embedder {
+  return { model, dims: EMBEDDING_DIMS, embed: async (texts) => texts.map(() => query) };
+}
+
+/** Creates a memory saved at `iso` with a current stored vector, so the indexer leaves it alone. */
+async function place(a: TalorysAgent, model: string, content: string, iso: string, vector: Float32Array): Promise<Memory> {
+  const s = a.services;
+  const m = s.memories.create({ content, category: "fact" });
+  setUpdated(a, m.id, iso);
+  ensureSemanticSchema(s.db);
+  s.db.run(
+    `INSERT INTO tal_semantic_vectors (memory_id, model, dims, content_hash, vector, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    m.id, model, EMBEDDING_DIMS, await contentHash(embeddingText(m)), encodeVector(vector), iso,
+  );
+  return s.memories.get(m.id)!;
+}
 
 describe("rrf", () => {
   it("sums 1/(k + rank) over the lists an id appears in", () => {
@@ -120,6 +179,8 @@ describe("hybridSearch", () => {
       const { ctx, s } = context(a);
       const both = s.memories.create({ content: "My car is a Tesla", category: "fact" });
       const vectorOnly = s.memories.create({ content: "Changed the oil last week", category: "fact" });
+      // Older than the Tesla, so it is not pulled in as a newer near-duplicate at the Tesla's score.
+      setUpdated(a, vectorOnly.id, "2026-01-01T00:00:00Z");
       await runIndexer(ctx);
       const hits = await hybridSearch(ctx, "tesla", { limit: 10 });
       expect(hits[0]!.memory.id).toBe(both.id);
@@ -210,6 +271,117 @@ describe("hybridSearch", () => {
       await runIndexer(ctx);
       s.memories.delete(m.id);
       expect(await hybridSearch(ctx, "my vehicle", { limit: 10 })).toEqual([]);
+    });
+  });
+});
+
+describe("newer near-duplicate pull-in", () => {
+  const MODEL = DEFAULT_SEMANTIC_CONFIG.model;
+  const OIL = "How often should I change the oil in my car?";
+  // Andy's measured cosines: query~Bug 0.515, query~Porsche 0.519, query~Tesla 0.488 (under the
+  // 0.50 floor); Bug~Tesla 0.772 (pulls), Bug~Porsche 0.523 and Tesla~Porsche 0.589 (do not).
+  const [query, bug, tesla, porsche] = fromGram([
+    [1, 0.515, 0.488, 0.519],
+    [0.515, 1, 0.772, 0.523],
+    [0.488, 0.772, 1, 0.589],
+    [0.519, 0.523, 0.589, 1],
+  ]);
+
+  it("pulls the newer Tesla in beside the Bug for the oil question, on the prompt path and in search_memories", async () => {
+    await inAgent(async (a) => {
+      const { ctx, s } = context(a, {}, stubEmbedder(MODEL, query!));
+      const b = await place(a, MODEL, "My car is a Volkswagen bug from the 1960s.", "2026-10-11T03:30:17Z", bug!);
+      const t = await place(a, MODEL, "I just traded my VW bug away and got a 2025 Tesla.", "2026-10-11T03:31:34Z", tesla!);
+      const p = await place(a, MODEL, "I would like to buy a Porsche one day.", "2026-10-11T03:31:42Z", porsche!);
+      expect(s.memories.search(OIL, 50).map((m) => m.id)).not.toContain(t.id);
+
+      const hits = await hybridSearch(ctx, OIL, { limit: 8 });
+      const ids = hits.map((h) => h.memory.id);
+      expect(ids).toContain(p.id);
+      expect(ids.indexOf(t.id)).toBe(ids.indexOf(b.id) + 1);
+      const pulled = hits[ids.indexOf(t.id)]!;
+      expect(pulled.cosine).toBeNull();
+      expect(pulled.fused).toBe(hits[ids.indexOf(b.id)]!.fused);
+      expect(hits[ids.indexOf(p.id)]!.cosine).toBeCloseTo(0.519, 3);
+
+      const selected = await selectSemanticMemories(ctx, OIL);
+      expect(selected.map((m) => m.id)).toEqual(expect.arrayContaining([b.id, t.id, p.id]));
+      expect(selected).toHaveLength(4);
+
+      const toolCtx: ToolContext = { services: s, timezone: "UTC", mode: "chat", ownerMessage: "" };
+      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")!;
+      const result = (await tool.execute({ query: OIL }, toolCtx)) as { memories: { id: string }[] };
+      expect(result.memories.map((m) => m.id)).toContain(t.id);
+    });
+  });
+
+  it("pulls a newer duplicate in, never an older one, and not one under the threshold", async () => {
+    const floor = { vectorFloor: { absolute: 0.95, relative: 0.1 } };
+    await inAgent(async (a) => {
+      const { ctx } = context(a, floor, stubEmbedder(MODEL, near(1, 1)));
+      const portland = await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(1, 1));
+      const denver = await place(a, MODEL, "I live in Denver", "2026-09-14T12:00:00Z", near(0.748, 2));
+      expect((await hybridSearch(ctx, "residence", { limit: 8 })).map((h) => h.memory.id)).toEqual([portland.id, denver.id]);
+    });
+    await inAgent(async (a) => {
+      const { ctx } = context(a, floor, stubEmbedder(MODEL, near(1, 1)));
+      await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(0.748, 2));
+      const denver = await place(a, MODEL, "I live in Denver", "2026-09-14T12:00:00Z", near(1, 1));
+      expect((await hybridSearch(ctx, "residence", { limit: 8 })).map((h) => h.memory.id)).toEqual([denver.id]);
+    });
+    await inAgent(async (a) => {
+      const { ctx } = context(a, floor, stubEmbedder(MODEL, near(1, 1)));
+      const older = await place(a, MODEL, "I like jazz", "2026-03-02T12:00:00Z", near(1, 1));
+      await place(a, MODEL, "I'm vegetarian", "2026-09-14T12:00:00Z", near(NEWER_DUPLICATE_COSINE - 0.01, 2));
+      await place(a, MODEL, "I collect stamps", "2026-03-02T12:00:00Z", near(0.9, 3));
+      expect((await hybridSearch(ctx, "hobby", { limit: 8 })).map((h) => h.memory.id)).toEqual([older.id]);
+    });
+  });
+
+  it("pulls at most two per hit, highest cosine first, without embedding anything", async () => {
+    await inAgent(async (a) => {
+      const embedder = stubEmbedder(MODEL, near(1, 1));
+      const { ctx, embed } = context(a, { vectorFloor: { absolute: 0.95, relative: 0.1 } }, embedder);
+      const base = await place(a, MODEL, "Base fact", "2026-01-01T00:00:00Z", near(1, 1));
+      await place(a, MODEL, "Third update", "2026-01-04T00:00:00Z", near(0.75, 2));
+      const best = await place(a, MODEL, "First update", "2026-01-02T00:00:00Z", near(0.9, 3));
+      const next = await place(a, MODEL, "Second update", "2026-01-03T00:00:00Z", near(0.8, 4));
+      const hits = await hybridSearch(ctx, "zzz", { limit: 8 });
+      expect(MAX_NEWER_PER_HIT).toBe(2);
+      expect(hits.map((h) => h.memory.id)).toEqual([base.id, best.id, next.id]);
+      expect(embed).toHaveBeenCalledTimes(1);
+    });
+    await inAgent(async (a) => {
+      const { ctx } = context(a, {}, null);
+      const portland = await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(1, 1));
+      const denver = await place(a, MODEL, "I moved to Denver", "2026-09-14T12:00:00Z", near(0.748, 2));
+      expect((await hybridSearch(ctx, "Portland", { limit: 8 })).map((h) => h.memory.id)).toEqual([portland.id, denver.id]);
+    });
+  });
+
+  it("drops the weakest regular hit from a full list, and skips the pull when nothing can go", async () => {
+    await inAgent(async (a) => {
+      const { ctx } = context(a, { vectorFloor: { absolute: 0.95, relative: 0.1 } }, stubEmbedder(MODEL, near(1, 1)));
+      const portland = await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(1, 1));
+      const denver = await place(a, MODEL, "I live in Denver", "2026-09-14T12:00:00Z", near(0.748, 2));
+      const kayak = await place(a, MODEL, "Owns a red kayak", "2026-01-01T12:00:00Z", near(0, 3));
+      const full = await hybridSearch(ctx, "kayak", { limit: 2 });
+      expect(full.map((h) => h.memory.id)).toEqual([portland.id, denver.id]);
+      expect(full.map((h) => h.memory.id)).not.toContain(kayak.id);
+      expect((await hybridSearch(ctx, "kayak", { limit: 1 })).map((h) => h.memory.id)).toEqual([portland.id]);
+    });
+  });
+
+  it("never pulls on identical timestamps or from a memory without a stored vector", async () => {
+    await inAgent(async (a) => {
+      const { ctx, s } = context(a, { vectorFloor: { absolute: 0.95, relative: 0.1 } }, stubEmbedder(MODEL, near(1, 1)));
+      const one = await place(a, MODEL, "Fact one", "2026-03-02T12:00:00Z", near(1, 1));
+      await place(a, MODEL, "Fact two", "2026-03-02T12:00:00Z", near(0.9, 2));
+      expect((await hybridSearch(ctx, "zzz", { limit: 8 })).map((h) => h.memory.id)).toEqual([one.id]);
+
+      const pending = s.memories.create({ content: "Kayak pending", category: "fact" });
+      setUpdated(a, pending.id, "2026-01-01T00:00:00Z");
+      expect((await hybridSearch(ctx, "Kayak", { limit: 8 })).map((h) => h.memory.id)).toEqual([one.id, pending.id]);
     });
   });
 });
