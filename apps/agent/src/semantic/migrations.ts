@@ -9,7 +9,7 @@ import { VECTOR_TABLE_V2, convertLegacyVectors, dropVectorCache } from "./vector
  * Rules:
  *  - Applied lazily: no `tal_semantic_*` table exists until the feature is first enabled.
  *  - Never ALTER or DROP upstream `tal_*` tables, and never add triggers to them.
- *  - Never read, write or migrate the fork's `tal_sem_*` tables; only
+ *  - Never read, write or migrate other `tal_sem_*` tables; only
  *    `dropSemanticData` removes them.
  *  - Never edit or reorder an existing migration; add a new one.
  */
@@ -75,7 +75,7 @@ export function ensureSemanticSchema(db: Database, migrations: SemanticMigration
   return version;
 }
 
-/** Names of every table matching `tal_sem%`: this module's and any fork leftovers. */
+/** Names of every table matching `tal_sem%`: this module's and any others. */
 export function semanticTableNames(db: Database): string[] {
   return db
     .all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'tal\\_sem%' ESCAPE '\\' ORDER BY name`)

@@ -87,9 +87,8 @@ const defined = <T extends object>(obj: T): Partial<T> =>
 
 /**
  * Returns the stored config merged over the defaults, or null when the key is absent
- * (the feature was never enabled). Unknown fields, such as the fork's `pastWeight`,
- * are ignored. A present but invalid value reads as the defaults, keeping `enabled`
- * when it is a boolean. Pass `db` to tell an unparseable stored value from an absent key.
+ * (the feature was never enabled). Unknown fields are ignored. A present but invalid
+ * value reads as the defaults, keeping `enabled` when it is a boolean. Pass `db` to tell an unparseable stored value from an absent key.
  * A stored untouched legacy default (bge-small with floors 0.5/0.1) reads with the current
  * default model and floors; the stored value itself is never rewritten. A stored floor without
  * `backstop` gets the stored model's default one, lowered to `absolute` when that is below it,

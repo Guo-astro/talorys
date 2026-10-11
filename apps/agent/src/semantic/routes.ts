@@ -173,7 +173,7 @@ semanticRoutes.get("/semantic/status", async (c) => {
   });
 });
 
-/** Drops every `tal_sem%` table (including fork leftovers) and the config key; memories are untouched. */
+/** Drops every `tal_sem%` table and the config key; memories are untouched. */
 semanticRoutes.delete("/semantic/data", async (c) => {
   await body(c, z.object({ confirm: z.literal("DELETE") }));
   const s = c.env.agent.services;

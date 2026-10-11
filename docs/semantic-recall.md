@@ -206,18 +206,6 @@ headers.
 | `POST /semantic/reindex` | Drop all vectors and re-embed |
 | `DELETE /semantic/data` | Body `{"confirm": "DELETE"}`; drop every module table and the config key |
 
-## Cleanup after the fact-layer fork
-
-An instance that ran the earlier fact-layer fork still holds its `tal_sem_*`
-tables. Slim works without cleanup: it ignores those tables and embeds memories
-into its own. To remove them once, recommended after switching:
-
-1. Settings → AI → Semantic memory recall → **Delete semantic data** (memories
-   are kept).
-2. Turn semantic recall **on** again.
-3. Click **Reindex** (one embedding per memory, well under the 500/day cap for a
-   personal store).
-
 ## Known limitation
 
 The embedding model matches meaning, not loose associations, so these memories
@@ -227,15 +215,10 @@ For "Plan me a Saturday adventure in the mountains", "I'm afraid of heights"
 (0.409) gets in only when few memories compete: in a 21-memory pool the 4
 fallback slots go to better-scoring memories. For "Can I play tennis like a
 regular person?", "I only have one arm" (0.427) and "I have no arms" (0.435)
-get in on the backstop. The live eval reports these cases but never fails on
-them. Lowering `vectorFloor` or the backstop trades misses for more noise in
+get in on the backstop. Lowering `vectorFloor` or the backstop trades misses for more noise in
 other answers.
 
-The car and oil cases count the VW as current only when the answer says he
-drives, owns or has it, and the oil case also fails when the answer gives the
-VW its own oil advice or says it lacks info about his car; a separate L-arm
-case reports, without failing, whether a tennis answer remembers that he has
-one arm, and L-noarm does the same for a saved "I have no arms".
+These behaviours were checked by hand against a live Workers AI backend.
 
 For local development and tests, see the mock embedder in
 [development.md](development.md#semantic-recall).
