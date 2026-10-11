@@ -14,7 +14,7 @@ import {
 } from "./config";
 import { MockEmbedder, createEmbedder, embeddingsToday } from "./embeddings";
 import { cachedSemanticConfig, invalidateSemanticCache } from "./index";
-import { pendingMemories, purgeAllVectors, purgeVector, runIndexer, startBackgroundIndex } from "./indexer";
+import { type IndexReport, pendingMemories, purgeAllVectors, purgeVector, runIndexer, startBackgroundIndex } from "./indexer";
 import { dropSemanticData, ensureSemanticSchema, semanticSchema } from "./migrations";
 import { LAZY_INDEX_BATCH, createSemanticContext, hybridSearch, savedDate } from "./recall";
 
@@ -168,17 +168,18 @@ semanticRoutes.post("/semantic/reindex", async (c) => {
   const s = c.env.agent.services;
   const ctx = createSemanticContext(s, c.env.env, config);
   s.db.run(`DELETE FROM tal_semantic_vectors`);
+  // Every pass awaited here starts after the delete: a call during a running pass gets its follow-up.
   let embedded = 0;
-  for (;;) {
-    const report = await runIndexer(ctx, { maxEmbed: LAZY_INDEX_BATCH });
+  let report: IndexReport;
+  do {
+    report = await runIndexer(ctx, { maxEmbed: LAZY_INDEX_BATCH });
     embedded += report.embedded;
-    if (report.pending === 0 || report.capped || report.embedded === 0) {
-      return c.json({
-        embedded,
-        pending: report.pending,
-        capped: report.capped ?? false,
-        ...(report.error ? { error: report.error } : report.skipped ? { error: report.skipped } : {}),
-      });
-    }
-  }
+  } while (report.pending > 0 && !report.capped && report.embedded > 0);
+  const pending = (await pendingMemories(s.db, ctx.embedder?.model ?? config.model)).length;
+  return c.json({
+    embedded,
+    pending,
+    capped: report.capped ?? false,
+    ...(report.error ? { error: report.error } : report.skipped ? { error: report.skipped } : {}),
+  });
 });

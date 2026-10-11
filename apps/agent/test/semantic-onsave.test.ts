@@ -55,6 +55,21 @@ describe("semantic on-save indexing", () => {
     });
   });
 
+  it("indexes memories saved back to back with no chat turn", async () => {
+    const c = await enabled();
+    const saved = await Promise.all(
+      ["Owns a red kayak", "Lives in Portland", "Plays the cello", "Drives a Tesla"].map((content) =>
+        c.json("/api/memories", { method: "POST", body: { content } }),
+      ),
+    );
+    const ids = saved.map((r: { memory: { id: string } }) => r.memory.id);
+    expect(await waitForIndexed(c)).toMatchObject({ pending: 0, vectors: 4 });
+    await inAgent((a) => {
+      expect(vectorIds(a.services).sort()).toEqual([...ids].sort());
+      reset(a.services);
+    });
+  });
+
   it("indexes after /api/import without a chat turn", async () => {
     const c = await enabled();
     await c.json("/api/memories", { method: "POST", body: { content: "Likes hiking in autumn" } });

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { client, inAgent, loggedIn } from "./helpers";
-import { embeddingsToday } from "../src/semantic/embeddings";
+import { MockEmbedder, embeddingsToday } from "../src/semantic/embeddings";
+import { runIndexer } from "../src/semantic/indexer";
 import { UsageService } from "../src/services/usage";
 import { invalidateSemanticCache } from "../src/semantic";
-import { DEFAULT_SEMANTIC_CONFIG, SEMANTIC_CONFIG_KEY, deleteSemanticConfig } from "../src/semantic/config";
+import { DEFAULT_SEMANTIC_CONFIG, SEMANTIC_CONFIG_KEY, deleteSemanticConfig, readSemanticConfig } from "../src/semantic/config";
 import { dropSemanticData, semanticTableNames } from "../src/semantic/migrations";
 import type { Services } from "../src/services/container";
 
@@ -152,6 +153,52 @@ describe("semantic routes", () => {
     expect((await c.json("/api/semantic/search?q=kayak&limit=3")).hits).toHaveLength(3);
     expect((await c.json("/api/semantic/search?q=kayak&limit=500")).hits).toHaveLength(50);
     expect((await c.call("/api/semantic/search")).status).toBe(400);
+    await inAgent((agent) => {
+      reset(agent.services);
+      agent.services.memories.clear();
+    });
+  });
+
+  it("reindex during an in-flight pass waits for a pass that starts after the delete", async () => {
+    await inAgent((agent) => {
+      reset(agent.services);
+      agent.services.memories.clear();
+      for (let i = 0; i < 5; i++) agent.services.memories.create({ content: `Kayak trip number ${i}` });
+    });
+    const c = await loggedIn();
+    await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true, maxEmbeddingsPerDay: 10_000 } });
+    expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 5, pending: 0, capped: false });
+
+    let entered!: () => void;
+    let release!: () => void;
+    const inEmbed = new Promise<void>((r) => (entered = r));
+    const gate = new Promise<void>((r) => (release = r));
+    // A pass that has listed only the newest memory and is still embedding it.
+    await inAgent((agent) => {
+      const s = agent.services;
+      s.memories.create({ content: "Drives a Tesla Model 3", category: "fact" });
+      const mock = new MockEmbedder();
+      const slow = {
+        model: mock.model,
+        dims: mock.dims,
+        embed: async (texts: string[]) => {
+          entered();
+          await gate;
+          return mock.embed(texts);
+        },
+      };
+      void runIndexer({ db: s.db, config: readSemanticConfig(s.settings)!, embedder: slow });
+    });
+    await inEmbed;
+
+    const reindex = c.call("/api/semantic/reindex", { method: "POST" });
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    const res = await reindex;
+    expect(res.status).toBe(200);
+    // The stale pass writes the newest memory; the follow-up re-embeds the other five.
+    expect(await res.json()).toEqual({ embedded: 5, pending: 0, capped: false });
+    expect(await c.json("/api/semantic/status")).toMatchObject({ vectors: 6, pending: 0 });
     await inAgent((agent) => {
       reset(agent.services);
       agent.services.memories.clear();

@@ -168,9 +168,45 @@ describe("semantic indexer", () => {
       const total = a.services.memories.count();
       const [r1, r2] = await Promise.all([runIndexer(ctx, { maxEmbed: 1000 }), runIndexer(ctx, { maxEmbed: 1000 })]);
       expect(embed).toHaveBeenCalledTimes(1);
-      expect(r1).toBe(r2);
       expect(r1.embedded).toBe(total);
       expect(embed.mock.calls[0]![0]).toHaveLength(total);
+      // The second caller gets the follow-up pass, which finds nothing left to embed.
+      expect(r2).toEqual({ embedded: 0, pending: 0, purged: 0 });
+    });
+  });
+
+  it("callers during a pass share one follow-up that embeds memories saved mid-pass", async () => {
+    await inAgent(async (a) => {
+      const { ctx, embed, embedder } = context(a);
+      let entered!: () => void;
+      let release!: () => void;
+      const inEmbed = new Promise<void>((r) => (entered = r));
+      const gate = new Promise<void>((r) => (release = r));
+      embed.mockImplementationOnce(async (texts) => {
+        entered();
+        await gate;
+        return MockEmbedder.prototype.embed.call(embedder, texts);
+      });
+      const total = a.services.memories.count();
+      const first = runIndexer(ctx, { maxEmbed: 1000 });
+      const early = runIndexer(ctx, { maxEmbed: 1000 });
+      await inEmbed;
+      const late = a.services.memories.create({ content: "Saved while the first pass embeds" });
+      const rest = [runIndexer(ctx), runIndexer(ctx, { maxEmbed: 1000 }), runIndexer(ctx)];
+      release();
+      const [r1, ...followUps] = await Promise.all([first, early, ...rest]);
+
+      expect(embed).toHaveBeenCalledTimes(2);
+      expect(r1).toMatchObject({ embedded: total, pending: 0 });
+      for (const r of followUps) expect(r).toBe(followUps[0]);
+      expect(followUps[0]).toMatchObject({ embedded: 1, pending: 0 });
+      expect(embed.mock.calls[1]![0]).toEqual([embeddingText(late)]);
+      const texts = embed.mock.calls.flatMap((call) => call[0]);
+      expect(texts).toHaveLength(total + 1);
+      expect(new Set(texts).size).toBe(texts.length);
+      expect(vectorRow(a, late.id)).not.toBeNull();
+      expect(await runIndexer(ctx)).toEqual({ embedded: 0, pending: 0, purged: 0 });
+      a.services.memories.delete(late.id);
     });
   });
 

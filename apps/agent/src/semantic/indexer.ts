@@ -64,20 +64,51 @@ export function purgeAllVectors(db: Database): void {
   if (tableExists(db, "tal_semantic_vectors")) db.run(`DELETE FROM tal_semantic_vectors`);
 }
 
-/** The running pass per database, so concurrent callers share one pass instead of embedding twice. */
-const inFlight = new WeakMap<Database, Promise<IndexReport>>();
+/** A pass queued behind the running one; it takes the latest caller's context and the largest batch. */
+interface FollowUp {
+  ctx: IndexerContext;
+  maxEmbed: number;
+  promise: Promise<IndexReport>;
+}
+
+interface IndexerState {
+  running: Promise<IndexReport>;
+  next?: FollowUp;
+}
+
+/** The running pass per database and at most one follow-up, so no memory is embedded twice. */
+const passes = new WeakMap<Database, IndexerState>();
 
 /**
  * Brings `tal_semantic_vectors` in line with `tal_memories`: purges orphans, then embeds
  * up to `maxEmbed` pending memories in one call, counted against `maxEmbeddingsPerDay`.
+ * A call during a running pass gets one follow-up pass that starts once it settles, so a
+ * memory saved mid-pass is still embedded; later callers share that follow-up.
  * Never rejects; embed failures leave the memories pending and are reported in `error`.
  */
 export function runIndexer(ctx: IndexerContext, opts: { maxEmbed?: number } = {}): Promise<IndexReport> {
-  const running = inFlight.get(ctx.db);
-  if (running) return running;
-  const pass = indexOnce(ctx, opts.maxEmbed ?? DEFAULT_MAX_EMBED).finally(() => inFlight.delete(ctx.db));
-  inFlight.set(ctx.db, pass);
-  return pass;
+  const maxEmbed = opts.maxEmbed ?? DEFAULT_MAX_EMBED;
+  const state = passes.get(ctx.db);
+  if (!state) return startPass(ctx, maxEmbed);
+  if (state.next) {
+    state.next.ctx = ctx;
+    state.next.maxEmbed = Math.max(state.next.maxEmbed, maxEmbed);
+  } else {
+    const next = { ctx, maxEmbed } as FollowUp;
+    next.promise = state.running.then(() => startPass(next.ctx, next.maxEmbed));
+    state.next = next;
+  }
+  return state.next.promise;
+}
+
+function startPass(ctx: IndexerContext, maxEmbed: number): Promise<IndexReport> {
+  const state: IndexerState = { running: indexOnce(ctx, maxEmbed) };
+  passes.set(ctx.db, state);
+  // Runs before a queued follow-up's own reaction, which then replaces this state.
+  void state.running.then(() => {
+    if (passes.get(ctx.db) === state && !state.next) passes.delete(ctx.db);
+  });
+  return state.running;
 }
 
 async function indexOnce({ db, config, embedder }: IndexerContext, maxEmbed: number): Promise<IndexReport> {
