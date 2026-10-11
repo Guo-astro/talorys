@@ -55,6 +55,33 @@ refers to it.
 }
 ```
 
+## One Worker, without Pages
+
+`apps/agent/wrangler.standalone.jsonc` deploys the agent Worker with the web UI
+as static assets, so one Worker serves both. Use it with tools that deploy a
+single Worker:
+
+```bash
+npm run build -w @talorys/web
+cd apps/agent
+npx wrangler secret put OWNER_PASSWORD -c wrangler.standalone.jsonc
+npx wrangler secret put SESSION_SECRET -c wrangler.standalone.jsonc   # 32+ random characters
+npx wrangler deploy -c wrangler.standalone.jsonc
+```
+
+`OWNER_PASSWORD` is the plain password, for deploys that cannot hash it
+beforehand. It must pass the installer's strength check (10+ characters, mixed
+classes or 16+ characters, no common words); a weak one counts as not configured
+and `/api/health` reports `"password": false`. When `OWNER_PASSWORD_HASH` is set,
+it takes precedence.
+
+In this mode, changing `SESSION_SECRET` also discards a password changed in the
+UI: login reverts to `OWNER_PASSWORD`, and every device is signed out.
+
+The config names the Worker `talorys`, and `wrangler deploy` replaces any Worker
+of that name in the account. Change `name` (or pass `--name`) to deploy under
+another one.
+
 ## Idempotency and recovery
 
 - The manifest records the installation id; re-runs reuse the same names.

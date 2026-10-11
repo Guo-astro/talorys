@@ -51,7 +51,11 @@ export function createServices(storage: DurableObjectStorage, env: Env, schedule
     settings,
     usage: new UsageService(db),
     activity,
-    auth: new AuthService(db, settings, { passwordHash: env.OWNER_PASSWORD_HASH, sessionSecret: env.SESSION_SECRET }),
+    auth: new AuthService(db, settings, {
+      passwordHash: env.OWNER_PASSWORD_HASH,
+      password: env.OWNER_PASSWORD,
+      sessionSecret: env.SESSION_SECRET,
+    }),
     automations: new AutomationService(automationsRepo, settings, activity, scheduler),
   };
 }

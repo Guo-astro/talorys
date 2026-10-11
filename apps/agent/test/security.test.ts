@@ -181,6 +181,23 @@ describe("password change", () => {
     });
     expect((await c.call("/api/tasks")).status).toBe(401);
   });
+
+  it("accepts a plain OWNER_PASSWORD when no hash is set", async () => {
+    const { AuthService } = await import("../src/auth/auth-service");
+    await inAgent(async (ag) => {
+      const secrets = { password: "Plain-secret-pass-1", sessionSecret: "test-session-secret-0123456789abcdefghijklmnop" };
+      const auth = new AuthService(ag.services.db, ag.services.settings, secrets);
+      expect(auth.isConfigured()).toBe(true);
+      const { token } = await auth.login("Plain-secret-pass-1", freshIp(), "test");
+      expect(await auth.validate(token)).not.toBeNull();
+      await expect(auth.login("Wrong-secret-pass-1", freshIp(), "test")).rejects.toThrow("Incorrect password.");
+      const weak = new AuthService(ag.services.db, ag.services.settings, { ...secrets, password: "1234" });
+      expect(weak.isConfigured()).toBe(false);
+      // Restore the original fingerprint for other tests.
+      auth.revokeAllExcept(null);
+      ag.services.settings.delete("auth.secret_fingerprint");
+    });
+  });
 });
 
 describe("sessions management", () => {

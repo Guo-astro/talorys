@@ -6,6 +6,7 @@ import {
   isPasswordHash,
   randomToken,
   sha256Hex,
+  timingSafeEqual,
   verifyPassword,
 } from "@talorys/shared";
 import type { Database } from "../db/database";
@@ -33,6 +34,8 @@ interface SessionRow {
 
 export interface AuthSecrets {
   passwordHash?: string;
+  /** Plain owner password, for deploys that cannot hash it ahead of time. Used only without a valid passwordHash. */
+  password?: string;
   sessionSecret?: string;
 }
 
@@ -40,8 +43,9 @@ export interface AuthSecrets {
  * Single-owner authentication.
  *
  * The installer stores a PBKDF2 hash of the owner password as the Worker secret
- * OWNER_PASSWORD_HASH. Password changes from the UI are stored as an override in
- * the Durable Object. Resetting the password via the CLI replaces the secret,
+ * OWNER_PASSWORD_HASH; a one-Worker deploy may set the plain OWNER_PASSWORD
+ * instead. Password changes from the UI are stored as an override in the
+ * Durable Object. Resetting the password via the CLI replaces the secret,
  * which changes its fingerprint: the override is discarded and all sessions revoked.
  *
  * Session tokens are random 256-bit values held only in an HttpOnly cookie. The
@@ -54,21 +58,35 @@ export class AuthService {
     private readonly secrets: AuthSecrets,
   ) {}
 
-  isConfigured(): boolean {
-    return isPasswordHash(this.secrets.passwordHash) && (this.secrets.sessionSecret?.length ?? 0) >= 32;
+  private secretHash(): string | null {
+    return isPasswordHash(this.secrets.passwordHash) ? this.secrets.passwordHash! : null;
   }
 
-  private requireConfigured(): { passwordHash: string; sessionSecret: string } {
+  /** A valid hash, or a plain password that passes the same strength check as the installer. */
+  passwordConfigured(): boolean {
+    const { password } = this.secrets;
+    return this.secretHash() !== null || (!!password && checkPasswordStrength(password) === null);
+  }
+
+  isConfigured(): boolean {
+    return this.passwordConfigured() && (this.secrets.sessionSecret?.length ?? 0) >= 32;
+  }
+
+  private requireConfigured(): { sessionSecret: string } {
     if (!this.isConfigured()) {
-      throw new AppError("NOT_CONFIGURED", "Owner credentials are not configured. Run the Talorys installer to set them.");
+      throw new AppError(
+        "NOT_CONFIGURED",
+        "Owner credentials are not configured. Run the Talorys installer, or set a strong OWNER_PASSWORD and SESSION_SECRET with `wrangler secret put`.",
+      );
     }
-    return { passwordHash: this.secrets.passwordHash!, sessionSecret: this.secrets.sessionSecret! };
+    return { sessionSecret: this.secrets.sessionSecret! };
   }
 
   /** Detects a CLI password reset (secret changed) and invalidates stale state. */
   private async syncSecretFingerprint(): Promise<void> {
-    const { passwordHash } = this.requireConfigured();
-    const fingerprint = (await sha256Hex(passwordHash)).slice(0, 32);
+    const { sessionSecret } = this.requireConfigured();
+    const secret = this.secretHash() ?? `plain$${await hmacSha256Hex(sessionSecret, this.secrets.password!)}`;
+    const fingerprint = (await sha256Hex(secret)).slice(0, 32);
     const stored = this.settings.getJson<string>(FINGERPRINT_KEY);
     if (stored === fingerprint) return;
     this.db.transaction(() => {
@@ -80,8 +98,16 @@ export class AuthService {
     });
   }
 
-  private currentPasswordHash(): string {
-    return this.settings.getJson<string>(OVERRIDE_KEY) ?? this.requireConfigured().passwordHash;
+  private async checkPassword(password: string): Promise<boolean> {
+    const hash = this.settings.getJson<string>(OVERRIDE_KEY) ?? this.secretHash();
+    if (hash) return verifyPassword(password, hash);
+    const { sessionSecret } = this.requireConfigured();
+    const encode = (value: string) => new TextEncoder().encode(value);
+    const [given, expected] = await Promise.all([
+      hmacSha256Hex(sessionSecret, password.normalize("NFKC")),
+      hmacSha256Hex(sessionSecret, this.secrets.password!.normalize("NFKC")),
+    ]);
+    return timingSafeEqual(encode(given), encode(expected));
   }
 
   // ---------- Rate limiting ----------
@@ -133,7 +159,7 @@ export class AuthService {
     this.requireConfigured();
     await this.syncSecretFingerprint();
     const attempt = this.beginAttempt(client);
-    const ok = await verifyPassword(password, this.currentPasswordHash());
+    const ok = await this.checkPassword(password);
     if (!ok) throw new AppError("UNAUTHORIZED", "Incorrect password.");
     this.markAttemptSucceeded(attempt);
     return this.createSession(userAgent);
@@ -199,7 +225,7 @@ export class AuthService {
     this.requireConfigured();
     await this.syncSecretFingerprint();
     const attempt = this.beginAttempt(client);
-    if (!(await verifyPassword(current, this.currentPasswordHash()))) {
+    if (!(await this.checkPassword(current))) {
       throw new AppError("UNAUTHORIZED", "Current password is incorrect.");
     }
     this.markAttemptSucceeded(attempt);

@@ -5,8 +5,10 @@ import type { Env } from "./env";
 export { TalorysAgent } from "./agent/talorys-agent";
 
 /**
- * Private backend entry point. Deployed with workers_dev and preview URLs
- * disabled, so it is reachable only through the Pages Function service binding.
+ * Backend entry point. The installer deploys it with workers_dev and preview
+ * URLs disabled, so it is reachable only through the Pages Function service
+ * binding. A one-Worker deploy (wrangler.standalone.jsonc) serves the UI as
+ * static assets and routes /api here; it is then public, behind the same auth.
  *
  * Every /api request is forwarded to the single owner agent ("personal-agent").
  * The instance name is fixed server-side; clients cannot choose agent identities.

@@ -23,7 +23,7 @@ systemRoutes.get("/health", (c) => {
     storage = "error";
   }
   const configured = {
-    password: !!c.env.env.OWNER_PASSWORD_HASH,
+    password: s.auth.passwordConfigured(),
     session_secret: (c.env.env.SESSION_SECRET?.length ?? 0) >= 32,
   };
   const report: HealthReport = {

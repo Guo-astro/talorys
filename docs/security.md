@@ -9,6 +9,10 @@ Talorys is single-user. The threat model assumes the internet can reach your
   PBKDF2-HMAC-SHA256 (100,000 iterations — the Workers maximum — 16-byte random
   salt) and stored as the `OWNER_PASSWORD_HASH` Worker secret. The plaintext
   never leaves the machine, is never written to disk and is never logged.
+  The exception is a [one-Worker deploy](deployment.md#one-worker-without-pages)
+  using `OWNER_PASSWORD`: the plaintext is then stored as an (encrypted) Worker
+  secret. It must pass the installer's strength check, or the Worker treats
+  the password as not configured and refuses every login.
 - A 256-bit `SESSION_SECRET` is generated locally and stored as a Worker secret.
 - Sessions are random 256-bit tokens in an `HttpOnly; Secure; SameSite=Strict;
   Path=/` cookie named `__Host-talorys_session`. The database stores only
@@ -36,7 +40,8 @@ request origin (or a same-origin `Sec-Fetch-Site`), and the cookie is
 ## Backend exposure
 
 The Worker is deployed with `workers_dev: false` and `preview_urls: false`. It is
-reachable only through the Pages service binding. Authorization is enforced in
+reachable only through the Pages service binding. A one-Worker deploy is public
+on `workers.dev` instead, behind the same checks. Authorization is enforced in
 the Worker for every route except `GET /api/health`, `POST /api/auth/login` and
 `GET /api/auth/session`. The agent instance name is fixed server-side.
 

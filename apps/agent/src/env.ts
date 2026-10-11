@@ -5,6 +5,8 @@ export interface Env {
   TalorysAgent: DurableObjectNamespace<TalorysAgent>;
   /** PBKDF2 hash of the owner password, set by the installer as a Worker secret. */
   OWNER_PASSWORD_HASH?: string;
+  /** Plain owner password, for deploys that cannot set the hash (a one-Worker deploy). Ignored when the hash is set; a weak one counts as not configured. */
+  OWNER_PASSWORD?: string;
   /** Random 256-bit secret used to key session token hashes. Worker secret. */
   SESSION_SECRET?: string;
   /** "development" enables local-only conveniences (mock AI, http cookies). Never set in production. */
