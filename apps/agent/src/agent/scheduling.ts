@@ -116,7 +116,7 @@ export class AutomationService {
    */
   async fire(automationId: string, scheduleId: string, execute: AutomationExecutor): Promise<void> {
     const automation = this.repo.get(automationId);
-    if (!automation?.enabled || automation.schedule_id !== scheduleId) return;
+    if (!automation?.enabled || automation.schedule_id !== scheduleId || automation.status === "running") return;
     const run = this.repo.startRun(automation);
     this.repo.update(automation.id, { status: "running" });
     let lastResult: string | null = null;
@@ -130,15 +130,20 @@ export class AutomationService {
       this.repo.finishRun(run.id, "error", null, lastError);
       this.activity.record("automation.failed", `Automation “${automation.name}” failed: ${lastError}`);
     }
+    const current = this.repo.get(automation.id);
+    this.repo.pruneRuns();
+    // The owner can pause, delete or reschedule while the executor awaits AI.
+    // Keep the completed run receipt without claiming a replacement schedule.
+    if (!current) return;
+    const ownsSchedule = current.enabled && current.schedule_id === scheduleId;
     const updated = this.repo.update(automation.id, {
       last_run: new Date().toISOString(),
       last_result: lastResult,
       last_error: lastError,
-      run_count: automation.run_count + 1,
-      schedule_id: null,
-      status: lastError ? "failed" : "scheduled",
+      run_count: current.run_count + 1,
+      ...(ownsSchedule ? { schedule_id: null, status: lastError ? "failed" as const : "scheduled" as const } : {}),
     });
-    this.repo.pruneRuns();
+    if (!ownsSchedule) return;
     // Schedule the next occurrence after both "now" and the slot that just fired.
     const slot = automation.next_run ? new Date(automation.next_run) : new Date();
     const after = new Date(Math.max(Date.now(), slot.getTime()));
