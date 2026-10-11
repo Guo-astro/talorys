@@ -31,6 +31,26 @@ test.describe("Talorys owner experience", () => {
     await expect(page.getByRole("heading", { name: "add task e2e review the roadmap" })).toBeVisible();
   });
 
+  test("deleting through chat waits for the owner to approve the exact task", async ({ page }) => {
+    await login(page);
+    const composer = page.getByRole("textbox", { name: "Message", exact: true });
+    await composer.fill("add task e2e approve-me");
+    await page.keyboard.press("Enter");
+    await expect(page.getByText('Added the task "e2e approve-me".')).toBeVisible();
+    await composer.fill("delete task e2e approve-me");
+    await page.keyboard.press("Enter");
+    const card = page.getByRole("group", { name: "Approval needed" });
+    await expect(card.getByText("Delete task “e2e approve-me”?")).toBeVisible();
+    await expect(page.getByText(`I've asked to delete "e2e approve-me". Approve it above if you want it gone.`)).toBeVisible();
+    // The card survives a reload and nothing has been deleted yet.
+    await page.reload();
+    await expect(card.getByText("Delete task “e2e approve-me”?")).toBeVisible();
+    await card.getByRole("button", { name: "Approve" }).click();
+    await expect(page.getByText(/Delete task “e2e approve-me” · Approved and done/)).toBeVisible();
+    await page.getByRole("link", { name: "Tasks" }).first().click();
+    await expect(page.getByText("e2e approve-me")).toHaveCount(0);
+  });
+
   test("conversations can be renamed and deleted", async ({ page }) => {
     await login(page);
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("list tasks");

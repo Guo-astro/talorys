@@ -69,12 +69,26 @@ export interface Conversation {
   message_count?: number;
 }
 
+export type PendingActionStatus = "pending" | "approved" | "cancelled" | "expired" | "failed";
+
+/** A destructive action the agent proposed. It runs only when the owner approves it in the UI. */
+export interface PendingAction {
+  id: string;
+  /** Server-written description of the exact target, e.g. `Delete task “Buy milk”`. */
+  summary: string;
+  status: PendingActionStatus;
+  error: string | null;
+  expires_at: string;
+}
+
 export interface ToolActivity {
   id: string;
   name: string;
   label: string;
   status: "running" | "success" | "error";
   error?: string;
+  /** Set when a destructive tool call is waiting for (or got) the owner's approval. */
+  approval?: PendingAction;
 }
 
 export interface ChatMessage {

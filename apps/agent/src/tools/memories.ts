@@ -1,6 +1,6 @@
 import { MEMORY_CATEGORIES } from "@talorys/shared";
 import { z } from "zod";
-import { defineTool, ToolError } from "./registry";
+import { defineTool, quoteTitle, ToolError } from "./registry";
 
 export const memoryTools = [
   defineTool({
@@ -46,17 +46,21 @@ export const memoryTools = [
   }),
   defineTool({
     name: "forget_memory",
-    description: "Delete a memory by id. Destructive: confirm with the owner first, then call with confirmed: true.",
+    description: "Propose deleting a memory by id. The owner must approve it in the app before anything is deleted.",
     permission: "destructive",
     maxCallsPerTurn: 3,
-    input: z.object({ id: z.string().min(1), confirmed: z.boolean().optional() }),
-    label: () => `Forgetting a memory`,
-    execute: (i, ctx) => {
+    input: z.object({ id: z.string().min(1) }),
+    label: () => `Proposing to forget a memory`,
+    prepare: (i, ctx) => {
       const m = ctx.services.memories.get(i.id);
       if (!m) throw new ToolError("Memory not found.");
-      ctx.services.memories.delete(i.id);
-      ctx.services.activity.record("memory.deleted", `Agent forgot: ${m.content}`);
-      return { forgotten: m.content };
+      return { targetId: m.id, summary: `Forget memory ${quoteTitle(m.content)}` };
+    },
+    commit: (id, ctx) => {
+      const m = ctx.services.memories.get(id);
+      if (!m) throw new ToolError("This memory no longer exists.");
+      ctx.services.memories.delete(m.id);
+      ctx.services.activity.record("memory.deleted", `Forgot: ${m.content} (approved agent action)`);
     },
   }),
 ];

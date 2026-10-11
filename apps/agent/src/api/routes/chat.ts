@@ -3,7 +3,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../app";
 import { body, query } from "../middleware";
-import { AppError } from "../errors";
+import { AppError, NotFoundError } from "../errors";
+import { ALL_TOOLS, runApprovedAction } from "../../tools";
 
 export const chatRoutes = new Hono<AppEnv>();
 
@@ -23,7 +24,7 @@ chatRoutes.get("/conversations/:id", (c) => {
   const { summary: _s, summary_upto: _u, ...rest } = conversation;
   return c.json({
     conversation: rest,
-    messages: s.conversations.messages(conversation.id),
+    messages: s.pendingActions.withCurrentStatus(s.conversations.messages(conversation.id)),
     streaming: c.env.agent.activeRuns.has(conversation.id),
   });
 });
@@ -124,4 +125,19 @@ chatRoutes.post("/chat/cancel", async (c) => {
   const controller = c.env.agent.activeRuns.get(conversation_id);
   controller?.abort();
   return c.json({ cancelled: !!controller });
+});
+
+/** Owner approval of a destructive action the agent proposed. The agent has no way to call this. */
+chatRoutes.post("/actions/:id/approve", async (c) => {
+  const s = c.env.agent.services;
+  const action = await runApprovedAction(ALL_TOOLS, { services: s, timezone: s.settings.get().timezone, mode: "chat" }, c.req.param("id"));
+  return c.json({ action });
+});
+
+chatRoutes.post("/actions/:id/cancel", (c) => {
+  const pending = c.env.agent.services.pendingActions;
+  const id = c.req.param("id");
+  if (!pending.get(id)) throw new NotFoundError("This action no longer exists.");
+  pending.resolve(id, "cancelled");
+  return c.json({ action: pending.view(id) });
 });

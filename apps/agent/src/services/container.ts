@@ -5,6 +5,7 @@ import { MemoryRepository } from "../db/repositories/memories";
 import { NoteRepository, ProjectRepository } from "../db/repositories/notes";
 import { ConversationRepository } from "../db/repositories/conversations";
 import { AutomationRepository, NotificationRepository } from "../db/repositories/automations";
+import { PendingActionRepository } from "../db/repositories/pending-actions";
 import { SettingsService } from "./settings";
 import { ActivityLog, UsageService } from "./usage";
 import { AuthService } from "../auth/auth-service";
@@ -20,6 +21,7 @@ export interface Services {
   conversations: ConversationRepository;
   automationsRepo: AutomationRepository;
   notifications: NotificationRepository;
+  pendingActions: PendingActionRepository;
   settings: SettingsService;
   usage: UsageService;
   activity: ActivityLog;
@@ -45,6 +47,7 @@ export function createServices(storage: DurableObjectStorage, env: Env, schedule
     conversations: new ConversationRepository(db),
     automationsRepo,
     notifications,
+    pendingActions: new PendingActionRepository(db),
     settings,
     usage: new UsageService(db),
     activity,
