@@ -225,6 +225,16 @@ tests/smoke             Optional real-account deployment test
 docs/                   Architecture, deployment, development, security, troubleshooting
 ```
 
+## Credits
+
+Thanks to everyone who has contributed to Talorys:
+
+- [Roc Yu (@rociiu)](https://github.com/rociiu) — creator and maintainer
+- [Derek (@KrunchMuffin)](https://github.com/KrunchMuffin) — Node.js 22 requirement, task deletion and
+  cancelled-turn fixes, Windows build support
+- [Rudy Celekli (@rudycelekli)](https://github.com/rudycelekli) — automation lifecycle, deployment
+  verification, and portable backup settings fixes
+
 ## License
 
 [MIT](LICENSE)
