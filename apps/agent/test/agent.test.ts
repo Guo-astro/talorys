@@ -202,6 +202,27 @@ describe("AI failure handling", () => {
     expect(done.message.status).toBe("error");
     expect(done.message.error).toMatch(/Workers AI allocation/);
   });
+
+  it("records a turn cancelled mid-stream as cancelled, not complete", async () => {
+    const controller = new AbortController();
+    // Like the AI SDK's streamText: on abort the stream just ends, without throwing.
+    const provider = new ScriptedProvider([]);
+    provider.generateWithTools = async function* () {
+      yield { type: "text", delta: "Partial " };
+      controller.abort();
+    };
+    const { done, stored } = await inAgent(async (agent) => {
+      const runner = new AgentRunner(agent.services, provider);
+      const events = [];
+      for await (const e of runner.chat({ message: "plan my week", signal: controller.signal })) events.push(e);
+      const done = events.at(-1) as any;
+      return { done, stored: agent.services.conversations.lastMessage(done.message.conversation_id) };
+    });
+    expect(done.type).toBe("done");
+    expect(done.message.status).toBe("cancelled");
+    expect(stored?.status).toBe("cancelled");
+    expect(stored?.content).toBe("Partial ");
+  });
 });
 
 describe("context management", () => {

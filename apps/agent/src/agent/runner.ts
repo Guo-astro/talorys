@@ -208,6 +208,11 @@ export class AgentRunner {
       }
       s.usage.increment({ tool_calls: executor.callCount });
 
+      // Providers (like the AI SDK's streamText) may end the stream quietly on abort instead of throwing.
+      if (input.signal.aborted) {
+        yield { type: "done", message: finish("cancelled", null) };
+        return;
+      }
       if (!text.trim()) {
         text = tools.some((t) => t.status === "success") ? "Done." : "I wasn't able to produce a response. Please try rephrasing.";
       }
