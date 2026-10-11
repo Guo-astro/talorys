@@ -35,7 +35,7 @@ const OLD = String.raw`(?:(?:old|'?60s|vintage|classic) )*`;
 const vwIsCurrent = (t) =>
   new RegExp(String.raw`\byou(?: currently)? (?:drive|own|have)s? (?:(?:a|an|the|your) )?${OLD}${VW}\b|\byou(?:'re| are)(?: currently)? driving (?:(?:a|an|the|your) )?${OLD}${VW}\b|\byour (?:car|vehicle) is (?:(?:a|an|the) )?${OLD}${VW}\b`).test(t);
 const VW_WORD = new RegExp(String.raw`\b${VW}\b`);
-const UPKEEP = /oil changes?|\bevery\b|\bmiles\b|\d,\d{3}|\d{4,}|\bmonths\b|owner's manual|mechanic|service interval/;
+const UPKEEP = /oil changes?|\bevery\b|\bmiles\b|\d,\d{3}|\b\d{4,}\s*(?:miles|mi|km)\b|\bmonths\b|owner's manual|mechanic|service interval/;
 /** Splits answer text into sentences and list items. */
 const sentences = (t) => t.split(/[.!?\n]+/).filter((s) => s.trim());
 /**
@@ -188,6 +188,12 @@ const OIL_RUN2 =
 const OIL_2TURN =
   "Quick correction - I misspoke earlier. According to what I have saved, you drive a **1960s VW Beetle**, not a Tesla. Apologies for the confusion!\n\nFor a classic air-cooled Beetle:\n\n- **Every ~3,000 miles or 6 months**, whichever comes first";
 
+// Real glm-5.3 L-oil answers from the 2026-10-11 live run; both must pass ("2025 Tesla" is a model year, not mileage).
+const OIL_GLM_RUN1 =
+  "Good news — you don't! You traded in your VW Bug for a 2025 Tesla, and since it's an EV, there's no engine oil to change. Teslas (and all electric cars) skip that maintenance item entirely.\n\nA few things you *will* want to keep up with on the Tesla instead:\n\n- **Tire rotation** – roughly every 6,250 miles (or when tread depth differs by 2/32\")\n- **Cabin air filter** – about every 2 years\n- **Brake fluid check** – every 2 years (brakes last longer than usual thanks to regenerative braking)\n- **Battery coolant** – only on longer intervals, per Tesla's guidance\n\nYour car's manual and the Tesla app will nudge you when service is due, so it's pretty low-maintenance compared to the old Bug. 🚗⚡";
+const OIL_GLM_RUN2 =
+  "Good news — you don't! You traded in your VW Bug for a 2025 Tesla, and since it's fully electric, there's no engine oil to change. Teslas don't have combustion engines, so traditional oil changes are a thing of the past for you.\n\nThat said, your Tesla still needs some routine maintenance:\n\n- **Brake fluid check** – every 2 years\n- **Cabin air filter** – every 2 years (or more often in dusty areas)\n- **Tire rotation** – roughly every 6,000–8,000 miles\n- **Wiper blades and washer fluid** – as needed\n- **Battery coolant** – typically only checked on a longer service interval\n\nMuch cheaper to maintain than your old Bug! Want me to set up a reminder for any of these, like a tire rotation or brake fluid check?";
+
 function selfTest() {
   const canned = [
     ["L-car", "You drive a 2025 Tesla.", true], ["L-car", "You drive a VW Bug from the 60's.", false],
@@ -202,6 +208,7 @@ function selfTest() {
     ["L-car", "Based on what I remember, you drive a **2025 Tesla**. I saved that fact when you mentioned trading in your bug for it on October 10, 2026.", true],
     ["L-car", "Your car is a VW Bug from the 60's.", false],
     ["L-oil", OIL_RUN1, false], ["L-oil", OIL_RUN2, false],
+    ["L-oil", OIL_GLM_RUN1, true], ["L-oil", OIL_GLM_RUN2, true],
     ["L-oil", "Unlike your old VW Bug, your 2025 Tesla is electric, so it doesn't need oil changes.", true],
     ["L-oil", "I don't have information about your car. Teslas are electric and don't need oil changes.", false],
     ["L-oil-2turn", OIL_2TURN, false],
