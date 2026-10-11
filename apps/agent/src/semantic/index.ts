@@ -1,10 +1,11 @@
 import type { Env } from "../env";
 import type { Services } from "../services/container";
 import { selectRelevantMemories } from "../agent/memory";
-import { ALL_TOOLS } from "../tools";
 import { readSemanticConfig, type SemanticConfig } from "./config";
 import type { RunnerExtensions } from "./hooks";
 import { ensureSemanticSchema } from "./migrations";
+import { createSemanticContext, selectSemanticMemories } from "./recall";
+import { semanticTools } from "./tools";
 
 export type { RunnerExtensions } from "./hooks";
 
@@ -32,14 +33,23 @@ export function cachedSemanticConfig(services: Services): SemanticConfig | null 
  * Runner extensions for the semantic module, or undefined when the feature is off so
  * the runner keeps its upstream behaviour. Never throws: a failure here must not break chat.
  */
-export function semanticExtensions(services: Services, _env: Env): RunnerExtensions | undefined {
+export function semanticExtensions(services: Services, env: Env): RunnerExtensions | undefined {
   try {
     const config = cachedSemanticConfig(services);
     if (!config?.enabled) return undefined;
     ensureSemanticSchema(services.db);
+    const ctx = createSemanticContext(services, env, config);
     return {
-      selectMemories: async (query) => selectRelevantMemories(services.memories, query),
-      tools: ALL_TOOLS,
+      // Recall must never fail a turn; on any error the upstream keyword selection stands in.
+      selectMemories: async (query) => {
+        try {
+          return await selectSemanticMemories(ctx, query);
+        } catch (error) {
+          console.warn("Semantic recall failed; using keyword recall", error instanceof Error ? error.message : String(error));
+          return selectRelevantMemories(services.memories, query);
+        }
+      },
+      tools: semanticTools(ctx),
     };
   } catch (error) {
     console.warn("Semantic extensions unavailable", error);

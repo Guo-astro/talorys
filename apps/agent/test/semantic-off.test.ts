@@ -103,17 +103,32 @@ describe("semantic recall off", () => {
     });
   });
 
-  it("enabled placeholder still equals upstream ranking and tools", async () => {
+  it("enabled keeps upstream tool shapes and only dates the memory lines", async () => {
     await inAgent(async (agent) => {
       const s = agent.services;
       resetSemantic(s);
+      s.memories.clear();
       s.memories.create({ content: "Prefers green tea in the morning", category: "preference" });
       writeSemanticConfig(s.settings, { enabled: true }, s.db);
       invalidateSemanticCache(s);
       const ext = semanticExtensions(s, workerEnv);
       expect(ext).toBeDefined();
-      expect(ext!.tools).toBe(ALL_TOOLS);
-      await compareRunners(s, ext);
+      expect(ext!.tools).not.toBe(ALL_TOOLS);
+
+      const upstream = new RecordingProvider();
+      const hooked = new RecordingProvider();
+      await chatOnce(new AgentRunner(s, upstream), "what tea do I like");
+      await chatOnce(new AgentRunner(s, hooked, ext), "what tea do I like");
+      await new AgentRunner(s, upstream).runScheduledPrompt("summarise my tea habits");
+      await new AgentRunner(s, hooked, ext).runScheduledPrompt("summarise my tea habits");
+      expect(hooked.calls).toHaveLength(2);
+      for (const i of [0, 1]) {
+        expect(toolShape(hooked.calls[i]!)).toEqual(toolShape(upstream.calls[i]!));
+        expect(hooked.calls[i]!.system).toBe(
+          upstream.calls[i]!.system.replace("Prefers green tea", "(saved 2026-03-04) Prefers green tea"),
+        );
+      }
+      expect(upstream.calls[0]!.system).toContain("- [preference] Prefers green tea in the morning");
     });
     await memoriesEqualUpstream();
     await inAgent((agent) => resetSemantic(agent.services));

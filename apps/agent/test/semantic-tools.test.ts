@@ -1,0 +1,98 @@
+import { describe, expect, it } from "vitest";
+import { inAgent } from "./helpers";
+import { invalidateSemanticCache } from "../src/semantic";
+import { DEFAULT_SEMANTIC_CONFIG, deleteSemanticConfig } from "../src/semantic/config";
+import { MockEmbedder } from "../src/semantic/embeddings";
+import { runIndexer } from "../src/semantic/indexer";
+import { dropSemanticData } from "../src/semantic/migrations";
+import type { SemanticContext } from "../src/semantic/recall";
+import { semanticTools } from "../src/semantic/tools";
+import { ALL_TOOLS, type ToolContext, type ToolDefinition } from "../src/tools";
+import type { TalorysAgent } from "../src/agent/talorys-agent";
+
+function setup(a: TalorysAgent) {
+  const s = a.services;
+  dropSemanticData(s.db);
+  deleteSemanticConfig(s.settings);
+  invalidateSemanticCache(s);
+  s.memories.clear();
+  const sem: SemanticContext = {
+    db: s.db,
+    services: s,
+    embedder: new MockEmbedder(),
+    config: { ...DEFAULT_SEMANTIC_CONFIG, enabled: true, maxEmbeddingsPerDay: 10_000 },
+  };
+  const toolCtx: ToolContext = { services: s, timezone: "UTC", mode: "chat", ownerMessage: "" };
+  const tool = (tools: ToolDefinition[], name: string) => tools.find((t) => t.name === name)!;
+  return { s, sem, toolCtx, tool };
+}
+
+describe("semantic tools", () => {
+  it("keep every upstream tool and replace only the search wrappers' execute", async () => {
+    await inAgent((a) => {
+      const { sem } = setup(a);
+      const tools = semanticTools(sem);
+      expect(tools.map((t) => t.name)).toEqual(ALL_TOOLS.map((t) => t.name));
+      tools.forEach((t, i) => {
+        const base = ALL_TOOLS[i]!;
+        expect(t.description).toBe(base.description);
+        expect(t.input).toBe(base.input);
+        expect(t.permission).toBe(base.permission);
+        expect(t.maxCallsPerTurn).toBe(base.maxCallsPerTurn);
+        expect(t.label).toBe(base.label);
+        if (t.name === "search_memories" || t.name === "search") expect(t.execute).not.toBe(base.execute);
+        else expect(t).toBe(base);
+      });
+    });
+  });
+
+  it("search_memories returns hybrid hits with a saved date", async () => {
+    await inAgent(async (a) => {
+      const { s, sem, toolCtx, tool } = setup(a);
+      const tesla = s.memories.create({ content: "Drives a Tesla Model 3", category: "fact" });
+      s.db.run(`UPDATE tal_memories SET updated_at = ? WHERE id = ?`, "2026-10-05T10:00:00Z", tesla.id);
+      s.memories.create({ content: "Capital of France is Paris", category: "fact" });
+      await runIndexer(sem);
+
+      const upstream = await tool(ALL_TOOLS, "search_memories").execute({ query: "my vehicle" }, toolCtx);
+      expect(upstream).toEqual({ memories: [] });
+      const result = await tool(semanticTools(sem), "search_memories").execute({ query: "my vehicle" }, toolCtx);
+      expect(result).toEqual({
+        memories: [{ id: tesla.id, content: "Drives a Tesla Model 3", category: "fact", saved: "2026-10-05" }],
+      });
+    });
+  });
+
+  it("search_memories returns at most ten hits", async () => {
+    await inAgent(async (a) => {
+      const { s, sem, toolCtx, tool } = setup(a);
+      for (let i = 0; i < 14; i++) s.memories.create({ content: `Kayak trip number ${i}`, category: "fact" });
+      const result = (await tool(semanticTools(sem), "search_memories").execute({ query: "kayak" }, toolCtx)) as {
+        memories: unknown[];
+      };
+      expect(result.memories).toHaveLength(10);
+    });
+  });
+
+  it("search keeps upstream sections and replaces memories with five hybrid hits", async () => {
+    await inAgent(async (a) => {
+      const { s, sem, toolCtx, tool } = setup(a);
+      for (let i = 0; i < 7; i++) s.memories.create({ content: `Kayak trip number ${i}`, category: "fact" });
+      const task = s.tasks.create({ title: "Wax the kayak" });
+      const upstream = (await tool(ALL_TOOLS, "search").execute({ query: "kayak" }, toolCtx)) as Record<string, unknown>;
+      const result = (await tool(semanticTools(sem), "search").execute({ query: "kayak" }, toolCtx)) as Record<string, unknown> & {
+        memories: { id: string; content: string; saved: string }[];
+      };
+      expect(Object.keys(result).sort()).toEqual(["conversations", "memories", "notes", "tasks"]);
+      expect(result.tasks).toEqual(upstream.tasks);
+      expect(result.notes).toEqual(upstream.notes);
+      expect(result.conversations).toEqual(upstream.conversations);
+      expect(result.memories).toHaveLength(5);
+      for (const m of result.memories) {
+        expect(Object.keys(m).sort()).toEqual(["content", "id", "saved"]);
+        expect(m.saved).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      }
+      s.tasks.delete(task.id);
+    });
+  });
+});
