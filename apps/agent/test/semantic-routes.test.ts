@@ -104,7 +104,7 @@ describe("semantic routes", () => {
     expect(await c.json("/api/semantic/status")).toEqual({
       enabled: true,
       ever_enabled: true,
-      schema: { track: "slim", version: 1 },
+      schema: { track: "slim", version: 2 },
       embedder: "mock",
       vectors: 0,
       pending: count,
@@ -114,7 +114,7 @@ describe("semantic routes", () => {
 
     await c.call("/api/semantic/config", { method: "PUT", body: { enabled: false } });
     const off = await c.json("/api/semantic/status");
-    expect(off).toMatchObject({ enabled: false, ever_enabled: true, schema: { track: "slim", version: 1 }, pending: 0 });
+    expect(off).toMatchObject({ enabled: false, ever_enabled: true, schema: { track: "slim", version: 2 }, pending: 0 });
     await inAgent((agent) => reset(agent.services));
   });
 

@@ -113,7 +113,10 @@ export function createEmbedder(env: Env, settings: SettingsService, model: strin
   return new WorkersAiEmbedder(env.AI, model);
 }
 
-/** Base64 of the vector's little-endian Float32 bytes, the TEXT format of `tal_semantic_vectors.vector`. */
+/**
+ * Base64 of the vector's little-endian Float32 bytes: the slim v1 TEXT vector format, kept to
+ * decode legacy rows (see `convertLegacyVectors`) and for tests.
+ */
 export function encodeVector(v: Float32Array): string {
   const view = new DataView(new ArrayBuffer(v.length * 4));
   for (let i = 0; i < v.length; i++) view.setFloat32(i * 4, v[i]!, true);

@@ -25,6 +25,7 @@ import {
 } from "./indexer";
 import { dropSemanticData, ensureSemanticSchema, semanticSchema } from "./migrations";
 import { LAZY_INDEX_BATCH, createSemanticContext, hybridSearch, savedAt } from "./recall";
+import { countVectors, deleteAllVectors, dropVectorCache } from "./vectorStore";
 
 /**
  * Semantic recall API, mounted before `systemRoutes` and `dataRoutes` so its `/memories`
@@ -114,6 +115,7 @@ semanticRoutes.put("/semantic/config", async (c) => {
   const previous = cachedSemanticConfig(s);
   const config = writeSemanticConfig(s.settings, patch, s.db);
   invalidateSemanticCache(s);
+  if (config.model !== previous?.model) dropVectorCache(s.db);
   // A new model (or turning the feature on) leaves every memory pending; embed them in the background.
   if (config.enabled && (config.model !== previous?.model || !previous?.enabled)) {
     try {
@@ -139,9 +141,7 @@ semanticRoutes.get("/semantic/status", async (c) => {
     ever_enabled: config !== null,
     schema,
     embedder: embedder instanceof MockEmbedder ? "mock" : embedder ? "workers-ai" : "none",
-    vectors: schema
-      ? (s.db.one<{ n: number }>(`SELECT count(*) AS n FROM tal_semantic_vectors WHERE model = ?`, current)?.n ?? 0)
-      : 0,
+    vectors: schema ? countVectors(s.db, current) : 0,
     pending: !enabled ? 0 : schema ? (await pendingMemories(s.db, current, embedder?.dims)).length : s.memories.count(),
     embeddings_today: schema ? embeddingsToday(s.db, UsageService.day()) : 0,
     cap: config?.maxEmbeddingsPerDay ?? DEFAULT_SEMANTIC_CONFIG.maxEmbeddingsPerDay,
@@ -153,6 +153,7 @@ semanticRoutes.delete("/semantic/data", async (c) => {
   await body(c, z.object({ confirm: z.literal("DELETE") }));
   const s = c.env.agent.services;
   dropSemanticData(s.db);
+  dropVectorCache(s.db);
   deleteSemanticConfig(s.settings);
   invalidateSemanticCache(s);
   return c.json({ deleted: true });
@@ -187,7 +188,7 @@ semanticRoutes.post("/semantic/reindex", async (c) => {
   const config = requireEnabled(c);
   const s = c.env.agent.services;
   const ctx = createSemanticContext(s, c.env.env, config);
-  s.db.run(`DELETE FROM tal_semantic_vectors`);
+  deleteAllVectors(s.db);
   // Every pass awaited here starts after the delete: a call during a running pass gets its follow-up.
   let embedded = 0;
   let report: IndexReport;

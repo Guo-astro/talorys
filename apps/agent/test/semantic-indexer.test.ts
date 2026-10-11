@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { inAgent, loggedIn } from "./helpers";
 import { invalidateSemanticCache } from "../src/semantic";
 import { DEFAULT_SEMANTIC_CONFIG, type SemanticConfig, deleteSemanticConfig } from "../src/semantic/config";
-import { EMBEDDING_DIMS, MockEmbedder, contentHash, decodeVector, embeddingText, embeddingsToday } from "../src/semantic/embeddings";
+import { EMBEDDING_DIMS, MockEmbedder, contentHash, embeddingText, embeddingsToday } from "../src/semantic/embeddings";
 import { type IndexerContext, pendingMemories, runIndexer, startBackgroundBackfill } from "../src/semantic/indexer";
 import { dropSemanticData, semanticTableNames } from "../src/semantic/migrations";
 import { UsageService } from "../src/services/usage";
@@ -21,7 +21,7 @@ function context(a: TalorysAgent, patch: Partial<SemanticConfig> = {}) {
 }
 
 const vectorRow = (a: TalorysAgent, id: string) =>
-  a.services.db.one<{ content_hash: string; model: string; dims: number; vector: string }>(
+  a.services.db.one<{ content_hash: string; model: string; dims: number; vector: ArrayBuffer }>(
     `SELECT content_hash, model, dims, vector FROM tal_semantic_vectors WHERE memory_id = ?`,
     id,
   );
@@ -47,7 +47,9 @@ describe("semantic indexer", () => {
       const row = vectorRow(a, m.id)!;
       expect(row.model).toBe("mock-bge-384");
       expect(row.dims).toBe(EMBEDDING_DIMS);
-      expect(decodeVector(row.vector)).toHaveLength(EMBEDDING_DIMS);
+      // A little-endian Float32 BLOB.
+      expect(row.vector).toBeInstanceOf(ArrayBuffer);
+      expect(row.vector.byteLength).toBe(EMBEDDING_DIMS * 4);
       expect(row.content_hash).toBe(await contentHash(embeddingText(m)));
       expect(embeddingsToday(a.services.db, UsageService.day())).toBe(1);
 

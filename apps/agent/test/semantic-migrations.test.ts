@@ -78,16 +78,16 @@ describe("semantic migrations", () => {
     });
   });
 
-  it("migrates a fresh database to track slim v1", async () => {
+  it("migrates a fresh database to track slim v2", async () => {
     await inAgent((agent) => {
       const s = agent.services;
       reset(s);
       expect(semanticSchema(s.db)).toBeNull();
       expect(ensureSemanticSchema(s.db)).toBe(SEMANTIC_MIGRATIONS.at(-1)!.version);
-      expect(semanticSchema(s.db)).toEqual({ track: "slim", version: 1 });
+      expect(semanticSchema(s.db)).toEqual({ track: "slim", version: 2 });
       expect(semanticTableNames(s.db)).toEqual(SLIM_TABLES);
       // Idempotent.
-      expect(ensureSemanticSchema(s.db)).toBe(1);
+      expect(ensureSemanticSchema(s.db)).toBe(2);
       expect(semanticTableNames(s.db)).toEqual(SLIM_TABLES);
       reset(s);
     });
@@ -103,7 +103,7 @@ describe("semantic migrations", () => {
 
       writeSemanticConfig(s.settings, { enabled: true }, s.db);
       invalidateSemanticCache(s);
-      expect(semanticSchema(s.db)).toEqual({ track: "slim", version: 1 });
+      expect(semanticSchema(s.db)).toEqual({ track: "slim", version: 2 });
       expect(semanticTableNames(s.db)).toEqual(expect.arrayContaining([...FORK_TABLES, ...SLIM_TABLES]));
       expect(forkSnapshot(s)).toEqual(before);
     });

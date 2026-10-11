@@ -2,8 +2,9 @@ import { type Database, now } from "../db/database";
 import { estimateTokens } from "../ai/provider";
 import { UsageService } from "../services/usage";
 import type { SemanticConfig } from "./config";
-import { type Embedder, contentHash, embeddingText, embeddingsToday, encodeVector, recordEmbeddings } from "./embeddings";
-import { ensureSemanticSchema, tableExists } from "./migrations";
+import { type Embedder, contentHash, embeddingText, embeddingsToday, recordEmbeddings } from "./embeddings";
+import { ensureSemanticSchema } from "./migrations";
+import { deleteAllVectors, deleteVector, purgeOrphanVectors, upsertVectors, vectorMeta } from "./vectorStore";
 
 /** Most memories embedded in one indexer run, and so in one embed call. */
 export const DEFAULT_MAX_EMBED = 50;
@@ -36,40 +37,33 @@ export interface PendingMemory {
  * first. Needs the schema.
  */
 export async function pendingMemories(db: Database, model: string, dims = 0): Promise<PendingMemory[]> {
-  const rows = db.all<{
-    id: string;
-    content: string;
-    category: string;
-    model: string | null;
-    dims: number | null;
-    content_hash: string | null;
-  }>(
-    `SELECT m.id, m.content, m.category, v.model, v.dims, v.content_hash
-     FROM tal_memories m LEFT JOIN tal_semantic_vectors v ON v.memory_id = m.id
-     ORDER BY m.updated_at ASC, m.id ASC`,
+  const meta = vectorMeta(db);
+  const rows = db.all<{ id: string; content: string; category: string }>(
+    `SELECT id, content, category FROM tal_memories ORDER BY updated_at ASC, id ASC`,
   );
   const pending: PendingMemory[] = [];
   for (const row of rows) {
     const text = embeddingText(row);
     const hash = await contentHash(text);
-    if (row.model !== model || (dims > 0 && row.dims !== dims) || row.content_hash !== hash) pending.push({ id: row.id, text, hash });
+    const v = meta.get(row.id);
+    if (v?.model !== model || (dims > 0 && v.dims !== dims) || v.content_hash !== hash) pending.push({ id: row.id, text, hash });
   }
   return pending;
 }
 
 /** Deletes vectors whose memory no longer exists. */
 export function purgeOrphans(db: Database): number {
-  return db.run(`DELETE FROM tal_semantic_vectors WHERE memory_id NOT IN (SELECT id FROM tal_memories)`).changes;
+  return purgeOrphanVectors(db);
 }
 
 /** Deletes the vector for one forgotten memory. Runs even while the feature is off: forgetting is real. */
 export function purgeVector(db: Database, memoryId: string): void {
-  if (tableExists(db, "tal_semantic_vectors")) db.run(`DELETE FROM tal_semantic_vectors WHERE memory_id = ?`, memoryId);
+  deleteVector(db, memoryId);
 }
 
 /** Deletes every vector, after the owner clears all memories. */
 export function purgeAllVectors(db: Database): void {
-  if (tableExists(db, "tal_semantic_vectors")) db.run(`DELETE FROM tal_semantic_vectors`);
+  deleteAllVectors(db);
 }
 
 /** A pass queued behind the running one; it takes the latest caller's context and the largest batch. */
@@ -88,7 +82,7 @@ interface IndexerState {
 const passes = new WeakMap<Database, IndexerState>();
 
 /**
- * Brings `tal_semantic_vectors` in line with `tal_memories`: purges orphans, then embeds
+ * Brings the vector store in line with `tal_memories`: purges orphans, then embeds
  * up to `maxEmbed` pending memories in one call, counted against `maxEmbeddingsPerDay`.
  * A call during a running pass gets one follow-up pass that starts once it settles, so a
  * memory saved mid-pass is still embedded; later callers share that follow-up.
@@ -146,17 +140,17 @@ async function indexOnce({ db, config, embedder }: IndexerContext, maxEmbed: num
       throw new Error(`Embedder returned ${vectors.length} vectors for ${batch.length} texts`);
     }
     const ts = now();
-    db.transaction(() => {
-      vectors.forEach((vector, i) => {
-        const { id, hash } = batch[i]!;
-        db.run(
-          `INSERT INTO tal_semantic_vectors (memory_id, model, dims, content_hash, vector, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(memory_id) DO UPDATE SET model = excluded.model, dims = excluded.dims,
-             content_hash = excluded.content_hash, vector = excluded.vector, updated_at = excluded.updated_at`,
-          id, embedder.model, embedder.dims, hash, encodeVector(vector), ts,
-        );
-      });
-    });
+    upsertVectors(
+      db,
+      vectors.map((vector, i) => ({
+        memoryId: batch[i]!.id,
+        model: embedder.model,
+        dims: embedder.dims,
+        contentHash: batch[i]!.hash,
+        vector,
+        updatedAt: ts,
+      })),
+    );
     report.embedded = vectors.length;
     report.pending -= vectors.length;
     return report;

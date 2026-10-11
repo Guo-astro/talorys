@@ -4,9 +4,10 @@ import { estimateTokens } from "../ai/provider";
 import type { Services } from "../services/container";
 import { UsageService } from "../services/usage";
 import type { SemanticConfig } from "./config";
-import { MODEL_DIMS, cosine, createEmbedder, decodeVector, embeddingsToday, recordEmbeddings } from "./embeddings";
+import { MODEL_DIMS, createEmbedder, embeddingsToday, recordEmbeddings } from "./embeddings";
 import { type IndexerContext, runIndexer } from "./indexer";
 import { ensureSemanticSchema } from "./migrations";
+import { cachedVectors, dot, normalize } from "./vectorStore";
 
 /** Mirrors the private upstream limits in `selectRelevantMemories` (agent/memory.ts). */
 export const MAX_RELEVANT_MEMORIES = 8;
@@ -100,22 +101,19 @@ async function embedQuery(ctx: SemanticContext, query: string): Promise<Float32A
 export const FALLBACK_K = 4;
 
 /**
- * Brute-force cosine over every stored vector of `model` with the query's dims, keeping hits
- * at or above the absolute floor and within `relative` of the best hit, best first. Fewer than
- * FALLBACK_K such hits are filled up to it with the best remaining vectors at or above the
+ * Brute-force cosine (a dot product of unit vectors) over every cached vector of `model` with
+ * the query's dims, keeping hits at or above the absolute floor and within `relative` of the
+ * best hit, best first. Fewer than FALLBACK_K such hits are filled up to it with the best remaining vectors at or above the
  * backstop (ties to the newer update, then the lower id), each keeping its real cosine. Rows of
  * another model or size are never scored.
  */
 function scanVectors(ctx: SemanticContext, model: string, query: Float32Array): { id: string; cosine: number }[] {
   const { absolute, relative, backstop } = ctx.config.vectorFloor;
+  const unit = normalize(query);
+  const updated = new Map(ctx.db.all<{ id: string; updated_at: string }>(`SELECT id, updated_at FROM tal_memories`).map((r) => [r.id, r.updated_at]));
   const all: { id: string; cosine: number; updated: string | null }[] = [];
-  for (const row of ctx.db.all<{ memory_id: string; vector: string; updated_at: string | null }>(
-    `SELECT v.memory_id, v.vector, m.updated_at FROM tal_semantic_vectors v LEFT JOIN tal_memories m ON m.id = v.memory_id
-     WHERE v.model = ? AND v.dims = ?`,
-    model,
-    query.length,
-  )) {
-    all.push({ id: row.memory_id, cosine: cosine(query, decodeVector(row.vector)), updated: row.updated_at });
+  for (const [id, vector] of cachedVectors(ctx.db, model, query.length)) {
+    all.push({ id, cosine: dot(unit, vector), updated: updated.get(id) ?? null });
   }
   all.sort((a, b) => b.cosine - a.cosine || compareDesc(a.updated ?? "", b.updated ?? "") || compareAsc(a.id, b.id));
   const top = all[0];
@@ -174,8 +172,8 @@ const isNewer = (a: Memory, b: Memory) =>
  * stored vector is within the model's newerDuplicateCosine of its own, so a superseded fact never reaches
  * the model without its replacement. Pulled memories sit right after their puller with its fused
  * score and never pull further. A full list drops its weakest non-pulled hit that pulled nothing;
- * when there is none the pull is skipped. Uses stored vectors only: no embedder calls. Only rows of
- * the current model and its dims are read; with the dims still unknown, only equal-length vectors compare.
+ * when there is none the pull is skipped. Uses cached stored vectors only: no embedder calls. Only rows
+ * of the current model and its dims are read; with the dims still unknown, only equal-length vectors compare.
  */
 export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: number): RecallHit[] {
   const out = hits.slice(0, Math.max(0, limit));
@@ -183,15 +181,7 @@ export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: numb
   const model = ctx.embedder?.model ?? ctx.config.model;
   const dims = ctx.embedder?.dims || MODEL_DIMS[model] || 0;
   const threshold = newerDuplicateCosine(model);
-  const vectors = new Map<string, Float32Array>();
-  const rows = dims
-    ? ctx.db.all<{ memory_id: string; vector: string }>(
-        `SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ? AND dims = ?`,
-        model,
-        dims,
-      )
-    : ctx.db.all<{ memory_id: string; vector: string }>(`SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ?`, model);
-  for (const row of rows) vectors.set(row.memory_id, decodeVector(row.vector));
+  const vectors = cachedVectors(ctx.db, model, dims);
   const seen = new Set(out.map((h) => h.memory.id));
   const pulled = new Set<RecallHit>();
   const pullers = new Set<RecallHit>();
@@ -201,7 +191,7 @@ export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: numb
     const candidates: { memory: Memory; cosine: number }[] = [];
     for (const [id, vector] of vectors) {
       if (seen.has(id) || vector.length !== own.length) continue;
-      const c = cosine(own, vector);
+      const c = dot(own, vector);
       if (c < threshold) continue;
       const memory = ctx.services.memories.get(id);
       if (memory && isNewer(memory, puller.memory)) candidates.push({ memory, cosine: c });

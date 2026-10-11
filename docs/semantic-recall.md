@@ -89,7 +89,8 @@ On each chat turn and scheduled prompt, the module replaces upstream
 1. **Lazy indexing.** Up to 50 pending memories (new, or edited since their
    vector was made) are embedded in one batched Workers AI call. Vector rows of
    deleted memories are purged.
-2. **Two rankings.** A cosine scan over `tal_semantic_vectors`, keeping hits
+2. **Two rankings.** A cosine scan over the cached vectors (see
+   [Vector store](#vector-store)), keeping hits
    that clear both parts of `vectorFloor`, and the upstream keyword search.
 3. **Top-k fallback.** When fewer than 4 vector hits clear the floors, the list
    is filled up to 4 with the best remaining vectors at or above
@@ -107,6 +108,34 @@ system text is added.
 If embedding fails, no embedder is bound, or the daily cap is spent, the vector
 list is empty and the keyword list alone ranks, which matches upstream. If the
 module itself fails, chat falls back to upstream recall.
+
+## Vector store
+
+`apps/agent/src/semantic/vectorStore.ts` is the only code that reads or writes
+`tal_semantic_vectors`:
+
+```sql
+CREATE TABLE tal_semantic_vectors (memory_id TEXT PRIMARY KEY, model TEXT NOT NULL, dims INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, vector BLOB NOT NULL, updated_at TEXT NOT NULL)
+```
+
+Vectors are normalized to unit length before they are saved and stored as raw
+little-endian Float32 BLOBs, so a cosine is a plain dot product. A zero vector
+stays zero and scores 0.
+
+Each Durable Object keeps one in-memory cache of the decoded vectors for the
+current model and size, loaded on the first recall. Every write (indexing,
+forgetting one memory, Clear all, Reindex, the orphan sweep) changes SQLite and
+the cache in the same step; Delete semantic data and a model change drop the
+cache. Nothing expires. As a tripwire, each read compares the cached row count
+with SQLite and reloads on a mismatch, which catches out-of-band inserts and
+deletes; after an eviction the cache simply loads again.
+
+Slim migration v2 rebuilds the table with the BLOB column and converts the
+base64 TEXT rows of v1 in place, normalized, keeping model, dims, content hash
+and timestamps. Existing vectors are not re-embedded and nothing shows as
+pending afterwards. Recall scores match the old cosine within 1e-6, with the
+same ranking.
 
 ## Newest first (M1)
 
