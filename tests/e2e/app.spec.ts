@@ -81,6 +81,11 @@ test.describe("Talorys owner experience", () => {
     await page.getByLabel("Title").fill("e2e water the plants twice");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("e2e water the plants twice")).toBeVisible();
+    await page.getByText("e2e water the plants twice").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByRole("dialog")).toContainText("“e2e water the plants twice” will be permanently deleted.");
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByText("e2e water the plants twice")).toHaveCount(0);
   });
 
   test("memories can be added, searched, edited and deleted", async ({ page }) => {
