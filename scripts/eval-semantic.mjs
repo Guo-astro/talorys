@@ -21,7 +21,31 @@ const NO_OIL = ["no oil", "don't need", "doesn't need", "does not need", "electr
 
 /** Lowercases and folds curly apostrophes so "doesn’t" matches "doesn't". */
 const fold = (text) => text.replace(/[‘’ʼ]/g, "'").toLowerCase();
-const vwIsCurrent = (t) => /\byou(?:'re| are)? (?:currently )?(?:drive|driving|have|own)(?:s)? an? (?:'?60s )?(?:vw|volkswagen|bug|beetle)\b|\byour (?:vw|volkswagen|bug|beetle)\b/.test(t);
+const VW = String.raw`(?:vw|volkswagen|bug|beetle)`;
+const OLD = String.raw`(?:(?:old|'?60s|vintage|classic) )*`;
+/** Owning or driving wording only; "trading in your bug" is not a claim that he still has it. */
+const vwIsCurrent = (t) =>
+  new RegExp(String.raw`\byou(?: currently)? (?:drive|own|have)s? (?:(?:a|an|the|your) )?${OLD}${VW}\b|\byou(?:'re| are)(?: currently)? driving (?:(?:a|an|the|your) )?${OLD}${VW}\b|\byour (?:car|vehicle) is (?:(?:a|an|the) )?${OLD}${VW}\b`).test(t);
+const VW_WORD = new RegExp(String.raw`\b${VW}\b`);
+const UPKEEP = /oil changes?|\bevery\b|\bmiles\b|\d,\d{3}|\d{4,}|\bmonths\b|owner's manual|mechanic|service interval/;
+/** Splits answer text into sentences and list items. */
+const sentences = (t) => t.split(/[.!?\n]+/).filter((s) => s.trim());
+/**
+ * True when a sentence pairs the VW with upkeep advice. A sentence that also says the Tesla
+ * needs no oil is a contrast and passes, unless one of its clauses still pairs the two.
+ */
+const vwOilAdvice = (t) =>
+  /\bfor (?:the|your) (?:vw|bug)\b/.test(t) ||
+  sentences(t).some((s) => {
+    if (!VW_WORD.test(s) || !UPKEEP.test(s)) return false;
+    if (!(s.includes("tesla") && NO_OIL.some((w) => s.includes(w)))) return true;
+    return s.split(/, | but /).some((c) => VW_WORD.test(c) && UPKEEP.test(c));
+  });
+const lacksCarInfo = (t) =>
+  t.includes("don't have a record") ||
+  sentences(t).some(
+    (s) => /\b(?:don't|do not) have (?:any )?(?:information|info|details|a record|records|access)|\bno record of/.test(s) && /\bcar|vehicle|maintenance/.test(s),
+  );
 const asksWhichCar = (t) => /what (?:kind of |type of |make of )?(?:car|vehicle)[^.?!]*\?/.test(t);
 
 export const CASES = [
@@ -35,20 +59,23 @@ export const CASES = [
     memories: [{ content: "I'm allergic to peanuts" }, { content: "I like jazz", category: "preference" }] },
   { id: "L-mountain", gate: false, query: "Plan me a Saturday adventure in the mountains",
     memories: [{ content: "I'm afraid of heights" }, { content: "My knee surgery was in August" }, { content: "My boss is coming over Saturday", category: "person" }] },
+  { id: "L-arm", gate: false, memories: [{ content: "I only have one arm" }], query: "Can I play tennis like a regular person?" },
 ];
 
-/** Scores one answer; returns the list of reasons it fails (empty means pass). L-mountain reports only. */
+/** Scores one answer; returns the list of reasons it fails (empty means pass). L-mountain and L-arm report only. */
 export function score(caseId, text) {
   const t = fold(text);
+  const plain = t.replace(/\*/g, "");
   const has = (w) => t.includes(w);
   const problems = [];
   if (caseId === "L-car" || caseId === "L-oil") {
     if (!has("tesla")) problems.push("does not mention Tesla");
-    if (vwIsCurrent(t)) problems.push("presents the VW as current");
+    if (vwIsCurrent(plain)) problems.push("presents the VW as current");
   }
   if (caseId === "L-oil") {
     if (!NO_OIL.some(has)) problems.push("does not say an electric car needs no oil");
-    if (has("don't have a record")) problems.push("says it has no record");
+    if (vwOilAdvice(plain)) problems.push("gives the VW its own oil advice");
+    if (lacksCarInfo(plain)) problems.push("says it lacks info about his car");
     if (asksWhichCar(t)) problems.push("asks what car he drives");
   }
   if (caseId === "L-denver") {
@@ -131,6 +158,12 @@ async function ask(call, message) {
   return final || text;
 }
 
+// Real L-oil answers from the 2026-10-10 live run; both must fail.
+const OIL_RUN1 =
+  "I don't have access to your vehicle's maintenance records or service history. However, oil change frequency typically depends on:\n\n- **Vehicle type** - Electric vehicles (like your Tesla) don't need traditional oil changes\n- **Car age** - Older cars (like your VW Bug from the 60's) may need changes every 3,000-5,000 miles\n- **Driving conditions** - Stop-and-go traffic, extreme temperatures, or towing can require more frequent changes\n- **Oil type** - Synthetic oil often lasts longer than conventional oil\n\nFor your **2025 Tesla**, you generally won't need oil changes at all.\n\nFor your **VW Bug**, check your owner's manual for the manufacturer's recommendation, or consult a mechanic for guidance based on your driving habits.\n\nWould you like me to help you create a reminder for your next service appointment?";
+const OIL_RUN2 =
+  "I don't have information about your car's make, model, or maintenance schedule in your records. Based on what I remember, you've had a VW Bug from the 60's and a 2025 Tesla.\n\nFor the VW Bug, you'd typically need oil changes every 3,000-5,000 miles or every 3-6 months depending on driving conditions.\n\nFor the Tesla, electric vehicles don't require traditional oil changes.\n\nWould you like me to save this question so you don't forget to check your specific maintenance schedule?";
+
 function selfTest() {
   const canned = [
     ["L-car", "You drive a 2025 Tesla.", true], ["L-car", "You drive a VW Bug from the 60's.", false],
@@ -141,6 +174,12 @@ function selfTest() {
     ["L-denver", "You live in Denver (you used to live in Portland).", true], ["L-denver", "You live in Portland.", false],
     ["L-veg", "Try a chickpea curry with rice.", true], ["L-veg", "How about grilled salmon?", false],
     ["L-peanut", "No, Reese's contain peanuts and you're allergic.", true], ["L-peanut", "Sure, enjoy!", false],
+    ["L-car", "Based on what I remember, you drive a **2025 Tesla**. I saved that detail yesterday when you mentioned trading in your bug for it.", true],
+    ["L-car", "Based on what I remember, you drive a **2025 Tesla**. I saved that fact when you mentioned trading in your bug for it on October 10, 2026.", true],
+    ["L-car", "Your car is a VW Bug from the 60's.", false],
+    ["L-oil", OIL_RUN1, false], ["L-oil", OIL_RUN2, false],
+    ["L-oil", "Unlike your old VW Bug, your 2025 Tesla is electric, so it doesn't need oil changes.", true],
+    ["L-oil", "I don't have information about your car. Teslas are electric and don't need oil changes.", false],
   ];
   let failed = 0;
   for (const [id, answer, want] of canned) {
@@ -178,6 +217,7 @@ async function main() {
       r.latency_ms = Date.now() - started;
       r.problems = score(kase.id, r.answer);
       if (kase.id === "L-mountain") r.used = { heights: /height/i.test(r.answer), knee: /knee/i.test(r.answer) };
+      if (kase.id === "L-arm") r.used = { one_arm: /\bone arm|one-arm|single arm|one-handed|\barm\b/i.test(r.answer) };
       r.status = r.problems.length ? "fail" : "pass";
     } catch (error) {
       Object.assign(r, { status: "error", error: error.message, code: error.code });

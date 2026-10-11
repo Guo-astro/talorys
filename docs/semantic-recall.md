@@ -140,5 +140,11 @@ adventure in the mountains" scores both below the floor, so neither is
 recalled. The live eval reports this case but never fails on it. Lowering
 `vectorFloor` trades this for more noise in other answers.
 
+The car and oil cases count the VW as current only when the answer says he
+drives, owns or has it, and the oil case also fails when the answer gives the
+VW its own oil advice or says it lacks info about his car; a separate L-arm
+case reports, without failing, whether a tennis answer remembers that he has
+one arm.
+
 For local development and tests, see the mock embedder in
 [development.md](development.md#semantic-recall).
