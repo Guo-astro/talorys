@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { checkPasswordStrength, GITHUB_URL, LIMIT_CEILINGS, type Limits, type Settings, TALORYS_VERSION } from "@talorys/shared";
 import { Download, ExternalLink, LogOut, Monitor, Moon, Sun, Upload } from "lucide-react";
 import { Badge, Button, Card, ConfirmDialog, ErrorNotice, Input, Label, PageHeader, Select, Spinner, Switch } from "../components/ui";
+import { SemanticRecallCard } from "../components/SemanticRecallCard";
 import { keys, useApiMutation, useSessions, useSettings, useSystemInfo, useUsage } from "../hooks/queries";
 import { useSession } from "../hooks/session";
 import { useToast, errorMessage } from "../hooks/toast";
@@ -278,6 +279,7 @@ function AiTab({ settings }: { settings: Settings }) {
           </>
         )}
       </Section>
+      <SemanticRecallCard />
     </>
   );
 }
