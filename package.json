@@ -10,7 +10,7 @@
     "packages/create-talorys"
   ],
   "engines": {
-    "node": ">=20.18"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "node scripts/dev-setup.mjs && node scripts/ensure-dist.mjs && concurrently -k -n agent,pages,web -c cyan,magenta,green \"npm:dev:agent\" \"npm:dev:pages\" \"npm:dev:web\"",
@@ -34,5 +34,10 @@
     "vitest": "^4.1.11",
     "typescript": "^6.0.3",
     "@playwright/test": "^1.64.0"
+  },
+  "overrides": {
+    "tsup": {
+      "esbuild": "^0.28.1"
+    }
   }
 }

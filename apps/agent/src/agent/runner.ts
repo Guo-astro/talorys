@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatStreamEvent, ToolActivity } from "@talorys/shared";
+import type { ChatMessage, ChatStreamEvent, PendingAction, ToolActivity } from "@talorys/shared";
 import type { Services } from "../services/container";
 import { type AIProvider, classifyAiError, estimateTokens, type ProviderTool } from "../ai/provider";
 import { AppError, NotFoundError } from "../api/errors";
@@ -31,6 +31,20 @@ function toolLabel(tool: ToolDefinition | undefined, name: string, input: unknow
   } catch {
     return name;
   }
+}
+
+const APPROVAL_OUTCOME: Record<PendingAction["status"], string> = {
+  pending: "waiting for the owner's approval",
+  approved: "approved by the owner and done",
+  cancelled: "declined by the owner",
+  expired: "expired without approval",
+  failed: "approved but failed",
+};
+
+/** Lets the model see what happened to actions it proposed in earlier turns. */
+function withApprovalOutcomes(m: ChatMessage): ChatMessage {
+  const notes = m.tools.flatMap((t) => (t.approval ? [`[${t.approval.summary}: ${APPROVAL_OUTCOME[t.approval.status]}]`] : []));
+  return notes.length ? { ...m, content: `${m.content}\n\n${notes.join("\n")}`.trim() } : m;
 }
 
 /** Runs agent turns: context assembly, provider streaming, tool execution, persistence. */
@@ -93,9 +107,10 @@ export class AgentRunner {
 
       // 2. Context: relevant memories, summary, recent history within the token budget.
       const memories = this.ext ? await this.ext.selectMemories(userMessage.content) : selectRelevantMemories(s.memories, userMessage.content);
-      const history = s.conversations
-        .messages(conversation.id, { limit: 200 })
-        .filter((m) => m.role === "user" || m.status === "complete");
+      const history = s.pendingActions
+        .withCurrentStatus(s.conversations.messages(conversation.id, { limit: 200 }))
+        .filter((m) => m.role === "user" || m.status === "complete")
+        .map(withApprovalOutcomes);
       let summary = conversation.summary;
       let summaryUpto = conversation.summary_upto;
       const baseSystem = buildSystemPrompt({
@@ -142,14 +157,14 @@ export class AgentRunner {
       // 3. Tools with per-turn limits.
       const executor = new ToolExecutor(
         this.ext?.tools ?? ALL_TOOLS,
-        { services: s, timezone: settings.timezone, mode: "chat", ownerMessage: userMessage.content },
+        { services: s, timezone: settings.timezone, mode: "chat", conversationId: conversation.id },
         { maxToolCalls: limits.maxToolCalls },
       );
       const providerTools: ProviderTool[] = executor.available().map((t) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.input,
-        execute: (toolInput) => executor.execute(t.name, toolInput),
+        execute: (toolInput, callId) => executor.execute(t.name, toolInput, callId),
       }));
 
       s.usage.increment({ ai_requests: 1 });
@@ -181,6 +196,8 @@ export class AgentRunner {
           if (activity) {
             activity.status = event.error ? "error" : "success";
             if (event.error) activity.error = event.error.slice(0, 300);
+            const approval = executor.approvalFor(event.id);
+            if (approval) activity.approval = approval;
             yield { type: "tool", tool: { ...activity } };
           }
         } else if (event.type === "usage") {
@@ -193,6 +210,11 @@ export class AgentRunner {
       }
       s.usage.increment({ tool_calls: executor.callCount });
 
+      // Providers (like the AI SDK's streamText) may end the stream quietly on abort instead of throwing.
+      if (input.signal.aborted) {
+        yield { type: "done", message: finish("cancelled", null) };
+        return;
+      }
       if (!text.trim()) {
         text = tools.some((t) => t.status === "success") ? "Done." : "I wasn't able to produce a response. Please try rephrasing.";
       }
@@ -216,7 +238,7 @@ export class AgentRunner {
     if (!this.provider) throw new AppError("AI_UNAVAILABLE", "Workers AI is not configured.");
     const executor = new ToolExecutor(
       this.ext?.tools ?? ALL_TOOLS,
-      { services: s, timezone: settings.timezone, mode: "scheduled", ownerMessage: "" },
+      { services: s, timezone: settings.timezone, mode: "scheduled" },
       { maxToolCalls: Math.min(settings.limits.maxToolCalls, 4) },
     );
     const system = buildSystemPrompt({

@@ -171,6 +171,24 @@ export const MIGRATIONS: Migration[] = [
       END`,
     ],
   },
+  {
+    version: 2,
+    name: "pending destructive actions",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS tal_pending_actions (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES tal_conversations(id) ON DELETE CASCADE,
+        tool TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','cancelled','failed')),
+        error TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        resolved_at TEXT
+      )`,
+    ],
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

@@ -22,7 +22,7 @@ For anything larger than a bug fix, please open an issue first to discuss it.
 
 ## Development setup
 
-Requires Node.js 20.18+.
+Requires Node.js 22+.
 
 ```bash
 npm install

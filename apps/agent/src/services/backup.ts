@@ -11,7 +11,7 @@ export function exportData(s: Services): Backup {
     exported_at: new Date().toISOString(),
     app_version: TALORYS_VERSION,
     data: {
-      settings: s.settings.raw() as Record<string, unknown>,
+      settings: s.settings.get(),
       conversations: db.all(`SELECT id, title, summary, summary_upto, created_at, updated_at FROM tal_conversations ORDER BY created_at`),
       messages: db.all(`SELECT id, conversation_id, role, content, tools, status, error, created_at FROM tal_messages ORDER BY created_at`),
       memories: db.all(`SELECT * FROM tal_memories ORDER BY created_at`),
@@ -52,10 +52,10 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
   if (backup.version > BACKUP_VERSION) {
     throw new ValidationError(`This backup was made by a newer Talorys (format v${backup.version}). Update Talorys first.`);
   }
+  const previousTimezone = s.settings.get().timezone;
   const d = backup.data;
   const db = s.db;
   const now = new Date().toISOString();
-  const importedAutomations: string[] = [];
 
   const summary = db.transaction((): ImportSummary => {
     for (const p of d.projects) {
@@ -125,7 +125,6 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
         a.id, a.name, kind, str(a.message), JSON.stringify(schedule.data), enabled ? 1 : 0, enabled ? "scheduled" : "paused",
         str(a.created_at, now), now,
       );
-      if (enabled) importedAutomations.push(a.id);
       automations++;
     }
     if (d.settings && Object.keys(d.settings).length > 0) {
@@ -143,8 +142,9 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
     };
   });
 
-  // Arm imported schedules outside the data transaction (SDK schedules are separate rows).
-  if (importedAutomations.length > 0) await s.automations.rearmAll();
+  // Arm (or disarm) imported schedules outside the data transaction (SDK schedules are separate rows).
+  // A backup can change timezone even when all scheduled automations are local.
+  if (summary.automations > 0 || s.settings.get().timezone !== previousTimezone) await s.automations.rearmAll();
   s.activity.record("data.imported", `Imported backup from ${backup.exported_at}`);
   return summary;
 }

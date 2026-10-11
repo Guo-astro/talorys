@@ -10,7 +10,7 @@ npx create-talorys@latest
 
 | Step | Implementation |
 | --- | --- |
-| Check Node.js ≥ 20.18, templates, bundled Wrangler | `requirements.ts`, `scaffold.ts` |
+| Check Node.js ≥ 22, templates, bundled Wrangler | `requirements.ts`, `scaffold.ts` |
 | Detect global `wrangler` / `cf` (informational) | `requirements.ts` |
 | Verify login or open browser OAuth (`wrangler login`) | `install.ts › ensureAuthenticated` |
 | Choose account (`wrangler whoami --json`) | `install.ts › chooseAccount` |

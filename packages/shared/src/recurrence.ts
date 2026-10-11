@@ -13,10 +13,21 @@ import { z } from "zod";
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:MM (24h)");
 
+/** True when year/month/day name a real calendar date (rejects e.g. 2026-02-31). */
+export function isValidCalendarDate(year: number, month: number, day: number): boolean {
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+}
+
 export const scheduleSpecSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("once"),
-    at: z.string().regex(/^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d$/, "Expected YYYY-MM-DDTHH:MM local time"),
+    at: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d$/, "Expected YYYY-MM-DDTHH:MM local time")
+      .refine((v) => {
+        const [y, m, d] = v.slice(0, 10).split("-").map(Number);
+        return isValidCalendarDate(y!, m!, d!);
+      }, "Not a valid calendar date"),
   }),
   z.object({ type: z.literal("daily"), time: hhmm }),
   z.object({

@@ -1,6 +1,6 @@
 import { PROJECT_STATUSES } from "@talorys/shared";
 import { z } from "zod";
-import { defineTool, ToolError } from "./registry";
+import { defineTool, quoteTitle, ToolError } from "./registry";
 
 export const noteTools = [
   defineTool({
@@ -52,7 +52,8 @@ export const noteTools = [
   }),
   defineTool({
     name: "update_note",
-    description: "Replace a note's title and/or content, or append text to it.",
+    description:
+      "Replace a note's title and/or content, or append text to it. If both content and append are given, content replaces the note first and append is added after it.",
     permission: "write",
     maxCallsPerTurn: 3,
     input: z.object({
@@ -72,16 +73,21 @@ export const noteTools = [
   }),
   defineTool({
     name: "delete_note",
-    description: "Permanently delete a note. Destructive: ask the owner to confirm first, then call with confirmed: true.",
+    description: "Propose permanently deleting a note. The owner must approve it in the app before anything is deleted.",
     permission: "destructive",
     maxCallsPerTurn: 2,
-    input: z.object({ id: z.string().min(1), confirmed: z.boolean().optional() }),
-    label: () => `Deleting a note`,
-    execute: (i, ctx) => {
+    input: z.object({ id: z.string().min(1) }),
+    label: () => `Proposing to delete a note`,
+    prepare: (i, ctx) => {
       const note = ctx.services.notes.get(i.id);
       if (!note) throw new ToolError("Note not found.");
+      return { targetId: note.id, summary: `Delete note ${quoteTitle(note.title)}` };
+    },
+    commit: (id, ctx) => {
+      const note = ctx.services.notes.get(id);
+      if (!note) throw new ToolError("This note no longer exists.");
       ctx.services.notes.delete(note.id);
-      return { deleted: note.title };
+      ctx.services.activity.record("note.deleted", `Deleted note “${note.title}” (approved agent action)`);
     },
   }),
 ];

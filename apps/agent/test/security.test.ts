@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { client, freshIp, inAgent, loggedIn, password } from "./helpers";
+import { agentStub, BASE, client, freshIp, inAgent, loggedIn, password } from "./helpers";
 
 const PRIVATE_ROUTES: [string, string][] = [
   ["GET", "/api/conversations"],
@@ -94,12 +94,42 @@ describe("brute-force protection", () => {
     expect((await client().call("/api/auth/login", { method: "POST", body: { password: password() } })).status).toBe(200);
   });
 
+  it("cannot be bypassed with parallel attempts", async () => {
+    const c = client();
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => c.call("/api/auth/login", { method: "POST", body: { password: `wrong-${i}` } })),
+    );
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 401)).toHaveLength(5);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(7);
+    expect((await c.call("/api/auth/login", { method: "POST", body: { password: password() } })).status).toBe(429);
+  });
+
   it("applies a global limit against distributed guessing", async () => {
     await inAgent((a) => {
       for (let i = 0; i < 25; i++) a.services.db.run(`INSERT INTO tal_login_attempts (client, success, at) VALUES (?, 0, ?)`, `bot-${i}`, Date.now());
     });
     expect((await client().call("/api/auth/login", { method: "POST", body: { password: password() } })).status).toBe(429);
     await inAgent((a) => a.services.db.run(`DELETE FROM tal_login_attempts`));
+  });
+
+  it("refuses Agents SDK sub-agent routes at the Worker", async () => {
+    const c = client();
+    for (const path of ["/api/sub/talorys-agent/x/api/auth/login", "/api/sub/talorys-agent/x/api/health", "/api/tasks/sub/talorys-agent/x"]) {
+      expect((await c.call(path, { method: "POST", body: { password: password() } })).status).toBe(404);
+    }
+  });
+
+  it("refuses sub-agent routes inside the agent, where each would get its own empty rate-limit table", async () => {
+    const stub = await agentStub();
+    const res = await stub.fetch(
+      new Request(`${BASE}/api/sub/talorys-agent/x/api/auth/login`, {
+        method: "POST",
+        headers: { "cf-connecting-ip": freshIp(), "x-talorys-request": "1", origin: BASE, "content-type": "application/json" },
+        body: JSON.stringify({ password: password() }),
+      }),
+    );
+    expect(res.status).toBe(404);
   });
 });
 

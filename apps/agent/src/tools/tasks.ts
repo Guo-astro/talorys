@@ -1,6 +1,6 @@
 import { TASK_PRIORITIES, TASK_STATUSES, type Task } from "@talorys/shared";
 import { z } from "zod";
-import { defineTool, ToolError, type ToolContext } from "./registry";
+import { defineTool, quoteTitle, ToolError, type ToolContext } from "./registry";
 import { formatLocal, localDayBounds, parseLocalDateTime } from "../services/time";
 
 const localDate = z
@@ -137,16 +137,20 @@ export const taskTools = [
   }),
   defineTool({
     name: "delete_task",
-    description: "Permanently delete a task. Destructive: ask the owner to confirm first, then call with confirmed: true.",
+    description: "Propose permanently deleting a task. The owner must approve it in the app before anything is deleted.",
     permission: "destructive",
     maxCallsPerTurn: 3,
-    input: z.object({ task: z.string().min(1), confirmed: z.boolean().optional() }),
-    label: (i) => `Deleting task “${i.task}”`,
-    execute: (i, ctx) => {
+    input: z.object({ task: z.string().min(1).describe("Task id or exact/partial title") }),
+    label: (i) => `Proposing to delete “${i.task}”`,
+    prepare: (i, ctx) => {
       const task = resolveTask(i.task, ctx);
+      return { targetId: task.id, summary: `Delete task ${quoteTitle(task.title)}` };
+    },
+    commit: (id, ctx) => {
+      const task = ctx.services.tasks.get(id);
+      if (!task) throw new ToolError("This task no longer exists.");
       ctx.services.tasks.delete(task.id);
-      ctx.services.activity.record("task.deleted", `Agent deleted task “${task.title}”`);
-      return { deleted: task.title };
+      ctx.services.activity.record("task.deleted", `Deleted task “${task.title}” (approved agent action)`);
     },
   }),
 ];

@@ -81,7 +81,7 @@ npx create-talorys@latest
 
 The installer:
 
-1. Checks Node.js (20.18+) and uses its bundled Wrangler CLI (any globally installed `wrangler`/`cf` is detected but not required).
+1. Checks Node.js (22+) and uses its bundled Wrangler CLI (any globally installed `wrangler`/`cf` is detected but not required).
 2. Verifies your Cloudflare login, or **opens Cloudflare's authorization page in your browser**.
 3. Lets you choose an account (if you have several) and an agent name.
 4. Asks for an owner password (hidden input, strength-checked). It is hashed locally with PBKDF2-SHA256 and stored only as a Cloudflare secret.
@@ -160,7 +160,7 @@ Simple reminders and task digests never use AI. The Usage panel shows local
 
 ## 8. Local development
 
-Requirements: Node.js 20.18+.
+Requirements: Node.js 22+.
 
 ```bash
 git clone https://github.com/rociiu/talorys.git
@@ -184,7 +184,9 @@ Other scripts: `npm run build`, `npm test`, `npm run test:e2e`, `npm run test:pa
 **Settings → Privacy → Download backup** produces `talorys-backup.json` with
 conversations, memories, tasks, notes, projects, settings and automations
 (never sessions or credentials). **Import** validates the file and merges it in
-one transaction; importing the same backup twice is harmless.
+one transaction; importing the same backup twice is harmless. Settings include
+the effective installer defaults. If an imported timezone changes, retained
+local automations are also rescheduled in that timezone.
 
 ## 10. Update
 
@@ -223,6 +225,16 @@ tests/e2e               Playwright UI tests
 tests/smoke             Optional real-account deployment test
 docs/                   Architecture, deployment, development, security, troubleshooting
 ```
+
+## Credits
+
+Thanks to everyone who has contributed to Talorys:
+
+- [Roc Yu (@rociiu)](https://github.com/rociiu) — creator and maintainer
+- [Derek (@KrunchMuffin)](https://github.com/KrunchMuffin) — Node.js 22 requirement, task deletion and
+  cancelled-turn fixes, Windows build support
+- [Rudy Celekli (@rudycelekli)](https://github.com/rudycelekli) — automation lifecycle, deployment
+  verification, and portable backup settings fixes
 
 ## License
 

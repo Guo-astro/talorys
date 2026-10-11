@@ -38,7 +38,9 @@
   schedule (`this.schedule(date, "runAutomation", { automationId })`). When it
   fires, `AutomationService.fire` runs it, records the run, and computes the next
   occurrence in the owner's timezone. `onStart` reconciles lost or interrupted
-  schedules (a run missed by < 24 h executes once).
+  schedules (a run missed by < 24 h executes once). Finishing an active run
+  preserves owner pauses, deletions and replacement schedules; duplicate callbacks
+  do not execute again while that run is active.
 - **Agent turns**: `agent/runner.ts` builds context (system prompt, relevant
   memories, running summary, recent history within the token budget), calls the
   provider with tools, streams events, persists the result and records usage.

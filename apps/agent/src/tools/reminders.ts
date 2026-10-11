@@ -1,6 +1,6 @@
 import { scheduleSpecSchema } from "@talorys/shared";
 import { z } from "zod";
-import { defineTool, ToolError } from "./registry";
+import { defineTool, quoteTitle, ToolError } from "./registry";
 import { formatLocal, toLocalMinute } from "../services/time";
 
 export const reminderTools = [
@@ -78,14 +78,20 @@ export const reminderTools = [
   }),
   defineTool({
     name: "cancel_automation",
-    description: "Delete a reminder or automation by id. Destructive: confirm with the owner first, then call with confirmed: true.",
+    description: "Propose deleting a reminder or automation by id. The owner must approve it in the app before anything is deleted.",
     permission: "destructive",
     maxCallsPerTurn: 3,
-    input: z.object({ id: z.string().min(1), confirmed: z.boolean().optional() }),
-    label: () => `Cancelling a schedule`,
-    execute: async (i, ctx) => {
-      await ctx.services.automations.delete(i.id);
-      return { cancelled: i.id };
+    input: z.object({ id: z.string().min(1) }),
+    label: () => `Proposing to cancel a schedule`,
+    prepare: (i, ctx) => {
+      const a = ctx.services.automations.get(i.id);
+      if (!a) throw new ToolError("Automation not found.");
+      return { targetId: a.id, summary: `Cancel ${a.kind === "reminder" ? "reminder" : "automation"} ${quoteTitle(a.name)}` };
+    },
+    commit: async (id, ctx) => {
+      const a = ctx.services.automations.get(id);
+      if (!a) throw new ToolError("This automation no longer exists.");
+      await ctx.services.automations.delete(a.id);
     },
   }),
   defineTool({

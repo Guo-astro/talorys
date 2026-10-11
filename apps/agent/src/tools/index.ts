@@ -26,4 +26,4 @@ for (const t of ALL_TOOLS) {
   names.add(t.name);
 }
 
-export { ToolExecutor, ToolError, type ToolContext, type ToolDefinition } from "./registry";
+export { runApprovedAction, ToolExecutor, ToolError, type ToolContext, type ToolDefinition } from "./registry";
