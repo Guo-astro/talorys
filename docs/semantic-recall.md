@@ -1,0 +1,144 @@
+# Semantic recall
+
+Semantic recall is an opt-in module that finds memories by meaning as well as by
+keyword. It is off by default. While it is off, Talorys behaves exactly like
+upstream: same tools, same system prompt, same memory responses, and no
+`tal_semantic_*` tables.
+
+The code lives in `apps/agent/src/semantic/` plus one web component
+(`SemanticRecallCard`).
+
+## Enabling
+
+Turn it on in **Settings → AI → Semantic memory recall**. The card also shows
+the embedder in use, how many memories have vectors, how many are pending, and
+today's embeddings against the cap.
+
+The installer can turn it on for you: answer Yes to "Enable semantic recall?",
+or pass `--semantic` (`--no-semantic` or `-y` alone means No). A Yes adds the
+Worker var `TALORYS_SEMANTIC_DEFAULT=on`, and the agent enables the feature once
+on first boot. After that, Settings is the source of truth.
+
+Enabling creates the module's tables. Existing memories are embedded in the
+background and before each chat turn, 50 at a time.
+
+The config is stored in `tal_settings` under the key `semantic.recall`.
+Defaults come from `DEFAULT_SEMANTIC_CONFIG` in
+`apps/agent/src/semantic/config.ts`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Module on or off |
+| `model` | `@cf/baai/bge-small-en-v1.5` | Workers AI embedding model |
+| `maxEmbeddingsPerDay` | `500` | Daily embedding cap (0 to 10,000) |
+| `vectorFloor.absolute` | `0.5` | Minimum cosine score for a vector hit |
+| `vectorFloor.relative` | `0.1` | A vector hit must also be within this of the best hit |
+
+Turning it off keeps the vectors, so turning it back on only embeds what
+changed in the meantime.
+
+## How recall works
+
+On each chat turn and scheduled prompt, the module replaces upstream
+`selectRelevantMemories`:
+
+1. **Lazy indexing.** Up to 50 pending memories (new, or edited since their
+   vector was made) are embedded in one batched Workers AI call. Vector rows of
+   deleted memories are purged.
+2. **Two rankings.** A cosine scan over `tal_semantic_vectors`, keeping hits
+   that clear both parts of `vectorFloor`, and the upstream keyword search.
+3. **Fusion.** The two lists are merged with reciprocal rank fusion (k = 60).
+4. **Selection.** The top 8 go into the prompt, padded with recent preferences
+   by the upstream rule (up to 4, never past 8 in total).
+
+Memories reach the prompt in the upstream format (`- [category] content`). No
+system text is added.
+
+If embedding fails, no embedder is bound, or the daily cap is spent, the vector
+list is empty and the keyword list alone ranks, which matches upstream. If the
+module itself fails, chat falls back to upstream recall.
+
+## Newest first (M1)
+
+The selected memories are ordered newest first by last update, and each line
+starts with the date it was saved in the owner's timezone:
+
+```
+- [fact] (saved 2026-10-10) I just traded my bug in for a 2025 Tesla.
+- [fact] (saved 2026-03-02) I drive a VW Bug.
+```
+
+That lets the model prefer the newer of two conflicting memories without any
+extra bookkeeping. The date costs about 5 tokens per memory.
+
+## Budgets
+
+| Budget | Target |
+| --- | --- |
+| Embedding cap | 500 per day by default (`maxEmbeddingsPerDay`), separate from the AI request limit |
+| Neurons | About 0.1 per turn; a backfill of 1,000 memories is about 55 |
+| Cosine scan | ≤ 5 ms at 5,000 memories |
+| Storage | One vector row per memory |
+| New npm dependencies | 0 |
+
+Each query and each batch of memories counts toward the cap. When it is spent,
+recall uses keyword search until the next day.
+
+## Forget
+
+Forgetting is real. Deleting a memory from the Memory page, with
+`forget_memory` in chat, or with **Clear all** deletes its vector row in the
+same request. A forgotten memory never appears in recall again. This also
+happens while the feature is turned off, as long as its tables exist.
+
+Saving a memory (Memory page, `remember`, `update_memory`, or a backup import)
+starts a background index, so new memories do not wait for the next chat turn.
+
+## Backups and Reindex
+
+Vectors are derived data. The upstream backup (**Settings → Your data**) does not
+include them, and there is no separate semantic backup. After a restore, the
+imported memories are embedded in the background, lazily on the next chat
+turns, or all at once with **Reindex**.
+
+**Reindex** drops every vector and re-embeds all memories in batches of 50. It
+stops early if the daily cap is reached; the rest are picked up the next day.
+
+**Delete semantic data** drops every module table and the config key. Your
+memories are kept. The feature returns to its never-enabled state.
+
+## API
+
+All routes sit under `/api`, behind the existing session, CSRF and security
+headers.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /semantic/config`, `PUT /semantic/config` | Read or patch the config |
+| `GET /semantic/status` | Enabled flag, embedder, vectors, pending, embeddings today and cap |
+| `GET /semantic/search?q=&limit=` | Hybrid hits with cosine and fused scores |
+| `POST /semantic/reindex` | Drop all vectors and re-embed |
+| `DELETE /semantic/data` | Body `{"confirm": "DELETE"}`; drop every module table and the config key |
+
+## Cleanup after the fact-layer fork
+
+An instance that ran the earlier fact-layer fork still holds its `tal_sem_*`
+tables. Slim works without cleanup: it ignores those tables and embeds memories
+into its own. To remove them once, recommended after switching:
+
+1. Settings → AI → Semantic memory recall → **Delete semantic data** (memories
+   are kept).
+2. Turn semantic recall **on** again.
+3. Click **Reindex** (one embedding per memory, well under the 500/day cap for a
+   personal store).
+
+## Known limitation
+
+bge-small matches meaning, not loose associations. With "I'm afraid of
+heights" and "My knee surgery was in August" saved, "Plan me a Saturday
+adventure in the mountains" scores both below the floor, so neither is
+recalled. The live eval reports this case but never fails on it. Lowering
+`vectorFloor` trades this for more noise in other answers.
+
+For local development and tests, see the mock embedder in
+[development.md](development.md#semantic-recall).

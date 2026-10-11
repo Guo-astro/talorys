@@ -20,6 +20,7 @@ npx create-talorys@latest
 
 - **A private assistant** — chat with streaming responses, Markdown and tool activity indicators.
 - **Memory** — durable personal facts and preferences you can view, edit and delete. Only the most relevant memories are sent to the model on each turn.
+- **Semantic recall (optional)** — finds memories by meaning as well as keyword, and lists them newest first with their saved date. Off by default; turn it on in Settings → AI or install with `--semantic`. See [docs/semantic-recall.md](docs/semantic-recall.md).
 - **Tasks, notes and projects** — full CRUD in the UI, and from chat ("Add a task to review my project tomorrow").
 - **Automations** — one-time and recurring reminders, daily task digests and optional AI routines, delivered to an in-app notification center. They run on Durable Object alarms, so nothing has to stay online.
 - **Single-user by design** — no signup, no accounts, no teams. The installer sets the owner password.

@@ -40,6 +40,16 @@ npm run dev:remote-ai -w @talorys/agent   # instead of dev:agent
 `remember …`, `add task …`, `add note …`, `complete task …`, `list tasks`,
 `remind me in N minutes to …`, `search …`. Anything else gets an echo reply.
 
+### Semantic recall
+
+With the mock AI provider (or demo mode), [semantic recall](semantic-recall.md)
+uses the mock embedder instead of Workers AI: a deterministic hashed bag of
+words plus a small concept table (car/tesla/oil, vegetarian/dinner,
+peanut/allergic, city/denver, heights/mountains/knee). It exercises the full
+code path offline but does not produce real semantic similarity. The Settings
+card shows "Mock (local dev)" as the embedder. Use `dev:remote-ai` to try real
+embeddings.
+
 ### Adding a tool
 
 1. Create `apps/agent/src/tools/<name>.ts` with `defineTool({...})` entries.
