@@ -27,8 +27,10 @@ function setup(a: TalorysAgent) {
   return { s, sem, toolCtx, tool };
 }
 
+const WRAPPED = ["search_memories", "search", "remember", "update_memory", "forget_memory"];
+
 describe("semantic tools", () => {
-  it("keep every upstream tool and replace only the search wrappers' execute", async () => {
+  it("keep every upstream tool and replace only the five wrappers' execute", async () => {
     await inAgent((a) => {
       const { sem } = setup(a);
       const tools = semanticTools(sem);
@@ -40,7 +42,7 @@ describe("semantic tools", () => {
         expect(t.permission).toBe(base.permission);
         expect(t.maxCallsPerTurn).toBe(base.maxCallsPerTurn);
         expect(t.label).toBe(base.label);
-        if (t.name === "search_memories" || t.name === "search") expect(t.execute).not.toBe(base.execute);
+        if (WRAPPED.includes(t.name)) expect(t.execute).not.toBe(base.execute);
         else expect(t).toBe(base);
       });
     });
@@ -93,6 +95,35 @@ describe("semantic tools", () => {
         expect(m.saved).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       }
       s.tasks.delete(task.id);
+    });
+  });
+
+  it("wraps exactly the five upstream tools", async () => {
+    await inAgent((a) => {
+      const { sem } = setup(a);
+      const tools = semanticTools(sem);
+      expect(tools.filter((t, i) => t !== ALL_TOOLS[i]).map((t) => t.name).sort()).toEqual([...WRAPPED].sort());
+    });
+  });
+
+  it("remember and update_memory return upstream results and index in the background", async () => {
+    await inAgent(async (a) => {
+      const { s, sem, toolCtx, tool } = setup(a);
+      const tools = semanticTools(sem);
+      const vectors = () => s.db.all<{ memory_id: string; content_hash: string }>(`SELECT memory_id, content_hash FROM tal_semantic_vectors`);
+      const saved = (await tool(tools, "remember").execute({ content: "Owns a red kayak", category: "fact" }, toolCtx)) as {
+        remembered: { id: string; content: string; category: string };
+      };
+      expect(saved.remembered).toMatchObject({ content: "Owns a red kayak", category: "fact" });
+      await runIndexer(sem);
+      expect(vectors().map((v) => v.memory_id)).toEqual([saved.remembered.id]);
+      const before = vectors()[0]!.content_hash;
+
+      const updated = await tool(tools, "update_memory").execute({ id: saved.remembered.id, content: "Owns a blue kayak" }, toolCtx);
+      expect(updated).toEqual({ updated: { id: saved.remembered.id, content: "Owns a blue kayak" } });
+      await runIndexer(sem);
+      expect(vectors()[0]!.content_hash).not.toBe(before);
+      await expect(tool(tools, "update_memory").execute({ id: "missing", content: "Nothing here" }, toolCtx)).rejects.toThrow("Memory not found.");
     });
   });
 });

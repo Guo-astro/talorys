@@ -29,10 +29,11 @@ export function createApi() {
   app.use("*", csrfProtection);
   app.use("*", requireSession);
 
+  // First, so its middleware wraps the upstream /memories and /import handlers.
+  app.route("/", semanticRoutes);
   app.route("/", systemRoutes);
   app.route("/auth", authRoutes);
   app.route("/", chatRoutes);
-  app.route("/", semanticRoutes);
   app.route("/", dataRoutes);
   app.route("/", automationRoutes);
 

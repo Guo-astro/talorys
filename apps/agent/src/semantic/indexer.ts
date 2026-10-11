@@ -3,7 +3,7 @@ import { estimateTokens } from "../ai/provider";
 import { UsageService } from "../services/usage";
 import type { SemanticConfig } from "./config";
 import { type Embedder, contentHash, embeddingText, embeddingsToday, encodeVector, recordEmbeddings } from "./embeddings";
-import { ensureSemanticSchema } from "./migrations";
+import { ensureSemanticSchema, tableExists } from "./migrations";
 
 /** Most memories embedded in one indexer run, and so in one embed call. */
 export const DEFAULT_MAX_EMBED = 50;
@@ -52,6 +52,16 @@ export async function pendingMemories(db: Database, model: string): Promise<Pend
 /** Deletes vectors whose memory no longer exists. */
 export function purgeOrphans(db: Database): number {
   return db.run(`DELETE FROM tal_semantic_vectors WHERE memory_id NOT IN (SELECT id FROM tal_memories)`).changes;
+}
+
+/** Deletes the vector for one forgotten memory. Runs even while the feature is off: forgetting is real. */
+export function purgeVector(db: Database, memoryId: string): void {
+  if (tableExists(db, "tal_semantic_vectors")) db.run(`DELETE FROM tal_semantic_vectors WHERE memory_id = ?`, memoryId);
+}
+
+/** Deletes every vector, after the owner clears all memories. */
+export function purgeAllVectors(db: Database): void {
+  if (tableExists(db, "tal_semantic_vectors")) db.run(`DELETE FROM tal_semantic_vectors`);
 }
 
 /** The running pass per database, so concurrent callers share one pass instead of embedding twice. */
@@ -116,4 +126,17 @@ async function indexOnce({ db, config, embedder }: IndexerContext, maxEmbed: num
     console.warn("Semantic indexer failed", message);
     return { ...report, error: message };
   }
+}
+
+/**
+ * Starts an indexer run without awaiting it, so a memory write returns before embedding.
+ * The pass is handed to `waitUntil` when the runtime offers one; failures only log.
+ */
+export function startBackgroundIndex(ctx: IndexerContext, waitUntil?: (promise: Promise<unknown>) => void): Promise<void> {
+  const pass = runIndexer(ctx).then(
+    () => undefined,
+    (error) => console.warn("Semantic background index failed", error instanceof Error ? error.message : String(error)),
+  );
+  waitUntil?.(pass);
+  return pass;
 }

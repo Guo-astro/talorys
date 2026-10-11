@@ -2,6 +2,7 @@ import { type Context, Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../api/app";
 import { AppError } from "../api/errors";
+import type { Database } from "../db/database";
 import { body, query } from "../api/middleware";
 import { UsageService } from "../services/usage";
 import {
@@ -13,13 +14,13 @@ import {
 } from "./config";
 import { MockEmbedder, createEmbedder, embeddingsToday } from "./embeddings";
 import { cachedSemanticConfig, invalidateSemanticCache } from "./index";
-import { pendingMemories, runIndexer } from "./indexer";
+import { pendingMemories, purgeAllVectors, purgeVector, runIndexer, startBackgroundIndex } from "./indexer";
 import { dropSemanticData, ensureSemanticSchema, semanticSchema } from "./migrations";
 import { LAZY_INDEX_BATCH, createSemanticContext, hybridSearch, savedDate } from "./recall";
 
 /**
- * Semantic recall API, mounted before `dataRoutes` so its `/memories` and `/import`
- * middleware wraps the upstream handlers. Inherits session, CSRF and security
+ * Semantic recall API, mounted before `systemRoutes` and `dataRoutes` so its `/memories`
+ * and `/import` middleware wraps the upstream handlers. Inherits session, CSRF and security
  * headers from `createApi`.
  */
 export const semanticRoutes = new Hono<AppEnv>();
@@ -33,18 +34,63 @@ function requireEnabled(c: Context<AppEnv>): SemanticConfig {
   return config;
 }
 
-// ---------- Middleware around upstream memory writes (filled in by the on-save task) ----------
+// ---------- Middleware around upstream memory writes ----------
 
-semanticRoutes.use("/memories", async (_c, next) => {
+const isSuccess = (status: number) => status >= 200 && status < 300;
+
+/** The Durable Object's `waitUntil`, when the runtime exposes one. */
+function waitUntilOf(c: Context<AppEnv>): ((promise: Promise<unknown>) => void) | undefined {
+  const state = (c.env.agent as unknown as { ctx?: { waitUntil?: (promise: Promise<unknown>) => void } }).ctx;
+  return typeof state?.waitUntil === "function" ? (promise) => state.waitUntil!(promise) : undefined;
+}
+
+/**
+ * Runs after the upstream handler has produced its response. Errors are logged and
+ * swallowed: a memory write never fails or changes because of this module.
+ */
+function afterWrite(c: Context<AppEnv>, config: SemanticConfig, purge?: (db: Database) => void): void {
+  try {
+    if (!isSuccess(c.res.status)) return;
+    const s = c.env.agent.services;
+    if (purge) purge(s.db);
+    else if (config.enabled) startBackgroundIndex(createSemanticContext(s, c.env.env, config), waitUntilOf(c));
+  } catch (error) {
+    console.warn("Semantic on-save hook failed", error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** The stored config, or null when never enabled or unreadable, so the upstream write always runs. */
+function writeConfig(c: Context<AppEnv>): SemanticConfig | null {
+  try {
+    return cachedSemanticConfig(c.env.agent.services);
+  } catch (error) {
+    console.warn("Semantic config unreadable", error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+semanticRoutes.use("/memories", async (c, next) => {
+  const config = writeConfig(c);
   await next();
+  if (config === null) return;
+  if (c.req.method === "DELETE") afterWrite(c, config, purgeAllVectors);
+  else if (c.req.method === "POST") afterWrite(c, config);
 });
 
-semanticRoutes.use("/memories/*", async (_c, next) => {
+semanticRoutes.use("/memories/*", async (c, next) => {
+  const config = writeConfig(c);
   await next();
+  if (config === null) return;
+  if (c.req.method === "DELETE") {
+    const id = decodeURIComponent(c.req.path.slice(c.req.path.lastIndexOf("/") + 1));
+    afterWrite(c, config, (db) => purgeVector(db, id));
+  } else if (c.req.method === "PATCH") afterWrite(c, config);
 });
 
-semanticRoutes.use("/import", async (_c, next) => {
+semanticRoutes.use("/import", async (c, next) => {
+  const config = writeConfig(c);
   await next();
+  if (config !== null && c.req.method === "POST") afterWrite(c, config);
 });
 
 // ---------- Config, status and data ----------
