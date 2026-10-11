@@ -102,6 +102,31 @@ semanticRoutes.use("/import", async (c, next) => {
   if (config !== null && c.req.method === "POST") afterWrite(c, config);
 });
 
+/**
+ * Owner approval of an agent-proposed `forget_memory`: upstream's approve route deletes the
+ * memory, then this deletes its vector in the same request. Forgetting is a real delete, so it
+ * runs even while the feature is off; the vector stays when the memory still exists (the
+ * action failed or was already handled).
+ */
+semanticRoutes.use("/actions/*", async (c, next) => {
+  const parts = c.req.path.split("/");
+  const approving = c.req.method === "POST" && parts.at(-1) === "approve";
+  let target: string | null = null;
+  try {
+    const stored = approving ? c.env.agent.services.pendingActions.get(decodeURIComponent(parts.at(-2) ?? "")) : null;
+    target = stored?.tool === "forget_memory" ? stored.target_id : null;
+  } catch (error) {
+    console.warn("Semantic approve lookup failed", error instanceof Error ? error.message : String(error));
+  }
+  const config = target === null ? null : writeConfig(c);
+  await next();
+  if (target === null || config === null) return;
+  const memoryId = target;
+  afterWrite(c, config, (db) => {
+    if (!c.env.agent.services.memories.get(memoryId)) purgeVector(db, memoryId);
+  });
+});
+
 // ---------- Config, status and data ----------
 
 semanticRoutes.get("/semantic/config", (c) => {

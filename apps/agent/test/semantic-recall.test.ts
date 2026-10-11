@@ -33,6 +33,7 @@ import {
 import { UsageService } from "../src/services/usage";
 import { semanticTools } from "../src/semantic/tools";
 import type { ToolContext } from "../src/tools";
+import type { ImmediateTool } from "../src/tools/registry";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
 
 type ContextPatch = Partial<Omit<SemanticConfig, "vectorFloor">> & { vectorFloor?: Partial<SemanticConfig["vectorFloor"]> };
@@ -334,8 +335,8 @@ describe("newer near-duplicate pull-in", () => {
       expect(selected.map((m) => m.id)).toEqual(expect.arrayContaining([b.id, t.id, p.id]));
       expect(selected).toHaveLength(4);
 
-      const toolCtx: ToolContext = { services: s, timezone: "UTC", mode: "chat", ownerMessage: "" };
-      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")!;
+      const toolCtx: ToolContext = { services: s, timezone: "UTC", mode: "chat" };
+      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")! as ImmediateTool;
       const result = (await tool.execute({ query: OIL }, toolCtx)) as { memories: { id: string }[] };
       expect(result.memories.map((m) => m.id)).toContain(t.id);
     });
@@ -461,7 +462,7 @@ describe("newer near-duplicate pull-in", () => {
 describe("top-k vector fallback", () => {
   const M3 = "@cf/baai/bge-m3";
   const TENNIS = "Can I play tennis like a regular person?";
-  const toolCtx = (a: TalorysAgent): ToolContext => ({ services: a.services, timezone: "UTC", mode: "chat", ownerMessage: "" });
+  const toolCtx = (a: TalorysAgent): ToolContext => ({ services: a.services, timezone: "UTC", mode: "chat" });
   const vectorIds = (hits: { memory: Memory; cosine: number | null }[]) => hits.filter((h) => h.cosine !== null).map((h) => h.memory.id);
 
   it("defaults to a 0.40 backstop and fills to four", () => {
@@ -477,7 +478,7 @@ describe("top-k vector fallback", () => {
       expect(hits.map((h) => h.memory.id)).toEqual([arm.id]);
       expect(hits[0]!.cosine).toBeCloseTo(0.427, 3);
       expect((await selectSemanticMemories(ctx, TENNIS)).map((m) => m.id)).toEqual([arm.id]);
-      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")!;
+      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")! as ImmediateTool;
       const result = (await tool.execute({ query: TENNIS }, toolCtx(a))) as { memories: { id: string }[] };
       expect(result.memories.map((m) => m.id)).toEqual([arm.id]);
     });
@@ -490,7 +491,7 @@ describe("top-k vector fallback", () => {
       const query = "what's the capital of France?";
       expect(await hybridSearch(ctx, query, { limit: 8 })).toEqual([]);
       expect(await selectSemanticMemories(ctx, query)).toEqual([]);
-      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")!;
+      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")! as ImmediateTool;
       const result = (await tool.execute({ query }, toolCtx(a))) as { memories: { id: string }[] };
       expect(result.memories).toEqual([]);
     });

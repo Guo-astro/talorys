@@ -102,8 +102,11 @@ On each chat turn and scheduled prompt, the module replaces upstream
 5. **Selection.** The top 8 go into the prompt, padded with recent preferences
    by the upstream rule (up to 4, never past 8 in total).
 
-Memories reach the prompt in the upstream format (`- [category] content`). No
-system text is added.
+Memories reach the prompt in the upstream format (`- [category] content`),
+newest first, each content prefixed with its saved time, e.g.
+`(saved 2026-10-10 14:05 PDT)`. When two or more memories are selected, one more
+line is added to the memory list: "If two memories conflict, the more recently
+saved one is current." Nothing else is added to the system prompt.
 
 If embedding fails, no embedder is bound, or the daily cap is spent, the vector
 list is empty and the keyword list alone ranks, which matches upstream. If the
@@ -167,9 +170,11 @@ recall uses keyword search until the next day.
 
 ## Forget
 
-Forgetting is real. Deleting a memory from the Memory page, with
-`forget_memory` in chat, or with **Clear all** deletes its vector row in the
-same request. A forgotten memory never appears in recall again. This also
+Forgetting is real. Deleting a memory from the Memory page, approving a
+`forget_memory` the agent proposed in chat, or **Clear all** deletes its vector
+row in the same request. `forget_memory` itself only proposes: the memory and its
+vector stay until the owner approves the action card, and the vector stays if the
+approved action fails. A forgotten memory never appears in recall again. This also
 happens while the feature is turned off, as long as its tables exist.
 
 Saving a memory (Memory page, `remember`, `update_memory`, or a backup import)

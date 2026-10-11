@@ -8,6 +8,7 @@ import { dropSemanticData } from "../src/semantic/migrations";
 import type { SemanticContext } from "../src/semantic/recall";
 import { semanticTools } from "../src/semantic/tools";
 import { ALL_TOOLS, type ToolContext, type ToolDefinition } from "../src/tools";
+import type { ImmediateTool } from "../src/tools/registry";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
 
 function setup(a: TalorysAgent) {
@@ -22,15 +23,16 @@ function setup(a: TalorysAgent) {
     embedder: new MockEmbedder(),
     config: { ...DEFAULT_SEMANTIC_CONFIG, enabled: true, maxEmbeddingsPerDay: 10_000 },
   };
-  const toolCtx: ToolContext = { services: s, timezone: "UTC", mode: "chat", ownerMessage: "" };
-  const tool = (tools: ToolDefinition[], name: string) => tools.find((t) => t.name === name)!;
+  const toolCtx: ToolContext = { services: s, timezone: "UTC", mode: "chat" };
+  const tool = (tools: ToolDefinition[], name: string) => tools.find((t) => t.name === name)! as ImmediateTool;
   return { s, sem, toolCtx, tool };
 }
 
-const WRAPPED = ["search_memories", "search", "remember", "update_memory", "forget_memory"];
+// forget_memory stays upstream's: it only proposes; the approve route purges the vector (semantic-forget.test.ts).
+const WRAPPED = ["search_memories", "search", "remember", "update_memory"];
 
 describe("semantic tools", () => {
-  it("keep every upstream tool and replace only the five wrappers' execute", async () => {
+  it("keep every upstream tool and replace only the four wrappers' execute", async () => {
     await inAgent((a) => {
       const { sem } = setup(a);
       const tools = semanticTools(sem);
@@ -42,7 +44,7 @@ describe("semantic tools", () => {
         expect(t.permission).toBe(base.permission);
         expect(t.maxCallsPerTurn).toBe(base.maxCallsPerTurn);
         expect(t.label).toBe(base.label);
-        if (WRAPPED.includes(t.name)) expect(t.execute).not.toBe(base.execute);
+        if (WRAPPED.includes(t.name)) expect((t as ImmediateTool).execute).not.toBe((base as ImmediateTool).execute);
         else expect(t).toBe(base);
       });
     });
@@ -98,7 +100,7 @@ describe("semantic tools", () => {
     });
   });
 
-  it("wraps exactly the five upstream tools", async () => {
+  it("wraps exactly the four upstream tools", async () => {
     await inAgent((a) => {
       const { sem } = setup(a);
       const tools = semanticTools(sem);

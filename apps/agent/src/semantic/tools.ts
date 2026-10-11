@@ -1,13 +1,15 @@
 import { ALL_TOOLS, type ToolContext, type ToolDefinition } from "../tools";
-import { purgeVector, startBackgroundIndex } from "./indexer";
+import type { ImmediateTool } from "../tools/registry";
+import { startBackgroundIndex } from "./indexer";
 import { type SemanticContext, hybridSearch, savedAt } from "./recall";
 
 const SEARCH_MEMORY_LIMIT = 10;
 const SEARCH_ALL_MEMORY_LIMIT = 5;
 
-function upstream(name: string): ToolDefinition {
+/** An upstream read or write tool; destructive tools are never wrapped (they run on owner approval). */
+function upstream(name: string): ImmediateTool {
   const tool = ALL_TOOLS.find((t) => t.name === name);
-  if (!tool) throw new Error(`Upstream tool "${name}" not found`);
+  if (!tool || tool.permission === "destructive") throw new Error(`Upstream immediate tool "${name}" not found`);
   return tool;
 }
 
@@ -55,26 +57,10 @@ function wrapIndexAfter(sem: SemanticContext, name: string): ToolDefinition {
   };
 }
 
-/** Upstream `forget_memory`, then the forgotten memory's vector is deleted in the same call. */
-function wrapForget(sem: SemanticContext): ToolDefinition {
-  const base = upstream("forget_memory");
-  return {
-    ...base,
-    execute: async (raw: unknown, ctx: ToolContext) => {
-      const result = await base.execute(raw, ctx);
-      try {
-        purgeVector(sem.db, (raw as { id: string }).id);
-      } catch (error) {
-        console.warn("Semantic forget purge failed", error instanceof Error ? error.message : String(error));
-      }
-      return result;
-    },
-  };
-}
-
 /**
  * `ALL_TOOLS` with the search tools replaced in place by hybrid versions and the memory
- * write tools wrapped to keep vectors in step.
+ * save tools wrapped to index in the background. `forget_memory` stays upstream's: it only
+ * proposes, and the approve route purges the vector when the owner approves (see routes.ts).
  * Everything but `execute` is the upstream definition, so ToolExecutor enforces the same
  * permissions, per-turn caps and scheduled read-only mode.
  */
@@ -84,7 +70,6 @@ export function semanticTools(sem: SemanticContext): ToolDefinition[] {
     search: wrapSearch(sem),
     remember: wrapIndexAfter(sem, "remember"),
     update_memory: wrapIndexAfter(sem, "update_memory"),
-    forget_memory: wrapForget(sem),
   };
   return ALL_TOOLS.map((t) => wrapped[t.name] ?? t);
 }
