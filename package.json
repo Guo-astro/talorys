@@ -25,6 +25,7 @@
     "test:e2e": "playwright test",
     "test:pack": "npm run test:pack -w create-talorys",
     "test:smoke": "node tests/smoke/real-deploy.mjs",
+    "eval:semantic": "node scripts/eval-semantic.mjs",
     "screenshots": "node scripts/screenshots.mjs"
   },
   "devDependencies": {
