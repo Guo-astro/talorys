@@ -1,12 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
-import { inAgent, loggedIn } from "./helpers";
-import { invalidateSemanticCache } from "../src/semantic";
-import { DEFAULT_SEMANTIC_CONFIG, type SemanticConfig, deleteSemanticConfig } from "../src/semantic/config";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { inAgent, loggedIn, type Client } from "./helpers";
+import { invalidateSemanticCache, seedSemanticDefault, semanticExtensions } from "../src/semantic";
+import {
+  DEFAULT_SEMANTIC_CONFIG,
+  type SemanticConfig,
+  deleteSemanticConfig,
+  readSemanticConfig,
+  SEMANTIC_CONFIG_KEY,
+  writeSemanticConfig,
+} from "../src/semantic/config";
 import { EMBEDDING_DIMS, MockEmbedder, contentHash, embeddingText, embeddingsToday } from "../src/semantic/embeddings";
 import { type IndexerContext, pendingMemories, runIndexer, startBackgroundBackfill } from "../src/semantic/indexer";
 import { dropSemanticData, semanticTableNames } from "../src/semantic/migrations";
 import { UsageService } from "../src/services/usage";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
+import { type Services, createServices } from "../src/services/container";
+import { env } from "cloudflare:workers";
+import type { Env } from "../src/env";
+import type { Scheduler } from "../src/agent/scheduling";
 
 /** Clears semantic state and returns an enabled context with a spied mock embedder. */
 function context(a: TalorysAgent, patch: Partial<SemanticConfig> = {}) {
@@ -252,6 +263,177 @@ describe("semantic indexer", () => {
         for (const m of backup) a.services.memories.create({ content: m.content, category: m.category as never });
       }
       dropSemanticData(a.services.db);
+    });
+  });
+});
+
+function resetAll(s: Services) {
+  dropSemanticData(s.db);
+  deleteSemanticConfig(s.settings);
+  invalidateSemanticCache(s);
+  s.memories.clear();
+}
+
+/** Polls status until nothing is pending; never sends a chat turn. */
+async function waitForIndexed(c: Client): Promise<{ pending: number; vectors: number }> {
+  let status = { pending: -1, vectors: 0 };
+  for (let i = 0; i < 100; i++) {
+    status = await c.json("/api/semantic/status");
+    if (status.pending === 0) return status;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return status;
+}
+
+const vectorIds = (s: Services) => s.db.all<{ memory_id: string }>(`SELECT memory_id FROM tal_semantic_vectors`).map((r) => r.memory_id);
+
+async function enabled(): Promise<Client> {
+  await inAgent((a) => resetAll(a.services));
+  const c = await loggedIn();
+  const put = await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true, maxEmbeddingsPerDay: 10_000 } });
+  expect(put.status).toBe(200);
+  return c;
+}
+
+describe("semantic on-save indexing", () => {
+  it("indexes a Memory-page POST and PATCH in the background with unchanged responses", async () => {
+    const c = await enabled();
+    const created = await c.call("/api/memories", { method: "POST", body: { content: "Owns a red kayak", category: "fact" } });
+    expect(created.status).toBe(201);
+    const { memory } = (await created.json()) as { memory: { id: string; content: string; category: string } };
+    expect(memory).toMatchObject({ content: "Owns a red kayak", category: "fact" });
+    expect(await waitForIndexed(c)).toMatchObject({ pending: 0, vectors: 1 });
+    await inAgent((a) => expect(vectorIds(a.services)).toEqual([memory.id]));
+
+    const hash = await inAgent((a) => a.services.db.one<{ content_hash: string }>(`SELECT content_hash FROM tal_semantic_vectors`)!.content_hash);
+    const patched = await c.call(`/api/memories/${memory.id}`, { method: "PATCH", body: { content: "Owns a blue kayak" } });
+    expect(patched.status).toBe(200);
+    expect(((await patched.json()) as { memory: { content: string } }).memory.content).toBe("Owns a blue kayak");
+    expect(await waitForIndexed(c)).toMatchObject({ pending: 0, vectors: 1 });
+    await inAgent((a) => {
+      const row = a.services.db.one<{ content_hash: string }>(`SELECT content_hash FROM tal_semantic_vectors`)!;
+      expect(row.content_hash).not.toBe(hash);
+      resetAll(a.services);
+    });
+  });
+
+  it("indexes memories saved back to back with no chat turn", async () => {
+    const c = await enabled();
+    const saved = await Promise.all(
+      ["Owns a red kayak", "Lives in Portland", "Plays the cello", "Drives a Tesla"].map((content) =>
+        c.json("/api/memories", { method: "POST", body: { content } }),
+      ),
+    );
+    const ids = saved.map((r: { memory: { id: string } }) => r.memory.id);
+    expect(await waitForIndexed(c)).toMatchObject({ pending: 0, vectors: 4 });
+    await inAgent((a) => {
+      expect(vectorIds(a.services).sort()).toEqual([...ids].sort());
+      resetAll(a.services);
+    });
+  });
+
+  it("indexes after /api/import without a chat turn", async () => {
+    const c = await enabled();
+    await c.json("/api/memories", { method: "POST", body: { content: "Likes hiking in autumn" } });
+    await waitForIndexed(c);
+    const backup = await c.json("/api/export");
+    const pendingId = await inAgent((a) => a.services.memories.create({ content: "Plays the cello", category: "fact" }).id);
+    expect((await c.json("/api/semantic/status")).pending).toBe(1);
+
+    const res = await c.call("/api/import", { method: "POST", body: backup });
+    expect(res.status).toBe(200);
+    expect(Object.keys((await res.json()) as object)).toEqual(["imported"]);
+    expect(await waitForIndexed(c)).toMatchObject({ pending: 0 });
+    await inAgent((a) => {
+      expect(vectorIds(a.services)).toContain(pendingId);
+      resetAll(a.services);
+    });
+  });
+
+  it("starts no index for a failed write", async () => {
+    const c = await enabled();
+    await inAgent((a) => a.services.memories.create({ content: "Plays the cello", category: "fact" }));
+    const bad = await c.call("/api/memories", { method: "POST", body: { content: "" } });
+    expect(bad.status).toBe(400);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await c.json("/api/semantic/status")).toMatchObject({ pending: 1, vectors: 0 });
+    await inAgent((a) => resetAll(a.services));
+  });
+
+  it("does nothing when the feature was never enabled", async () => {
+    await inAgent((a) => resetAll(a.services));
+    const c = await loggedIn();
+    const created = await c.call("/api/memories", { method: "POST", body: { content: "Owns a red kayak" } });
+    expect(created.status).toBe(201);
+    await new Promise((r) => setTimeout(r, 50));
+    await inAgent((a) => {
+      expect(semanticTableNames(a.services.db)).toEqual([]);
+      resetAll(a.services);
+    });
+  });
+});
+
+const withVar = (value?: string) => ({ ...(env as unknown as Env), TALORYS_SEMANTIC_DEFAULT: value }) as Env;
+
+describe("installer semantic default seed", () => {
+  beforeEach(async () => {
+    await inAgent((agent) => {
+      agent.services.settings.delete(SEMANTIC_CONFIG_KEY);
+      invalidateSemanticCache(agent.services);
+    });
+  });
+
+  it("enables the feature once when the key is absent and the var is on", async () => {
+    await inAgent((agent) => {
+      const s = agent.services;
+      expect(seedSemanticDefault(s, withVar("on"))).toBe(true);
+      expect(readSemanticConfig(s.settings, s.db)?.enabled).toBe(true);
+      expect(s.activity.list().some((a) => a.type === "semantic.seeded")).toBe(true);
+      expect(semanticExtensions(s, withVar("on"))).toBeDefined();
+      expect(seedSemanticDefault(s, withVar("on"))).toBe(false);
+    });
+  });
+
+  it("does nothing when the var is absent or not on", async () => {
+    await inAgent((agent) => {
+      const s = agent.services;
+      expect(semanticExtensions(s, withVar(undefined))).toBeUndefined();
+      expect(seedSemanticDefault(s, withVar("off"))).toBe(false);
+      expect(readSemanticConfig(s.settings, s.db)).toBeNull();
+    });
+  });
+
+  it("keeps a Settings off across a restart with the var still on", async () => {
+    await inAgent((agent) => {
+      const s = agent.services;
+      seedSemanticDefault(s, withVar("on"));
+      writeSemanticConfig(s.settings, { enabled: false }, s.db);
+      invalidateSemanticCache(s);
+
+      // A restart builds fresh services over the same storage.
+      const restarted = createServices((agent as unknown as { ctx: DurableObjectState }).ctx.storage, withVar("on"), {} as Scheduler);
+      expect(semanticExtensions(restarted, withVar("on"))).toBeUndefined();
+      expect(seedSemanticDefault(restarted, withVar("on"))).toBe(false);
+      expect(readSemanticConfig(restarted.settings, restarted.db)?.enabled).toBe(false);
+    });
+  });
+
+  it("never overwrites a corrupt stored key", async () => {
+    await inAgent((agent) => {
+      const s = agent.services;
+      s.db.run(`INSERT OR REPLACE INTO tal_settings (key, value, updated_at) VALUES (?, ?, ?)`, SEMANTIC_CONFIG_KEY, "{not json", new Date().toISOString());
+      invalidateSemanticCache(s);
+      expect(seedSemanticDefault(s, withVar("on"))).toBe(false);
+      expect(s.db.one<{ value: string }>(`SELECT value FROM tal_settings WHERE key = ?`, SEMANTIC_CONFIG_KEY)?.value).toBe("{not json");
+    });
+  });
+
+  it("does not seed or throw when the config read throws", async () => {
+    await inAgent((agent) => {
+      const s = agent.services;
+      const broken = { ...s, settings: { ...s.settings, getJson: () => { throw new Error("boom"); } } } as unknown as typeof s;
+      expect(semanticExtensions(broken, withVar("on"))).toBeUndefined();
+      expect(readSemanticConfig(s.settings, s.db)).toBeNull();
     });
   });
 });
