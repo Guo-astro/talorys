@@ -20,11 +20,14 @@ if (appVersion !== pkg.version) {
   throw new Error(`Version mismatch: create-talorys ${pkg.version} vs TALORYS_VERSION ${appVersion}`);
 }
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const run = (cmd, args, cwd = root) => execFileSync(cmd, args, { cwd, stdio: "inherit", env: { ...process.env, WRANGLER_SEND_METRICS: "false" } });
+const run = (cmd, args, cwd = root, shell = false) =>
+  execFileSync(cmd, args, { cwd, stdio: "inherit", shell, env: { ...process.env, WRANGLER_SEND_METRICS: "false" } });
+// Windows refuses to spawn npm.cmd without a shell (Node's CVE-2024-27980 fix): run npm's JS entry with node instead.
+const npm = (args) =>
+  process.env.npm_execpath ? run(process.execPath, [process.env.npm_execpath, ...args]) : run("npm", args, root, process.platform === "win32");
 
 console.log("• Building frontend");
-run(npm, ["run", "build", "-w", "@talorys/web"]);
+npm(["run", "build", "-w", "@talorys/web"]);
 
 console.log("• Bundling agent Worker");
 const bundleDir = mkdtempSync(join(tmpdir(), "talorys-agent-"));

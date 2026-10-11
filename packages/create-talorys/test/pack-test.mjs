@@ -4,7 +4,7 @@
 //  3. run the installed `create-talorys` binary (--help, --version, full non-interactive install)
 // Cloudflare is simulated by test/fake-wrangler.mjs; the deployed site by a local HTTP stub.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,14 +13,18 @@ import assert from "node:assert/strict";
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const work = mkdtempSync(join(tmpdir(), "talorys-pack-"));
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+// Windows refuses to spawn npm.cmd without a shell (Node's CVE-2024-27980 fix): run npm's JS entry with node instead.
+const npm = (args, opts) =>
+  process.env.npm_execpath
+    ? execFileSync(process.execPath, [process.env.npm_execpath, ...args], opts)
+    : execFileSync("npm", args, { ...opts, shell: process.platform === "win32" });
 
 try {
   if (!existsSync(join(pkgDir, "templates/version.json")) || !existsSync(join(pkgDir, "dist/cli.js"))) {
-    execFileSync(npm, ["run", "build"], { cwd: pkgDir, stdio: "inherit" });
+    npm(["run", "build"], { cwd: pkgDir, stdio: "inherit" });
   }
   console.log("• npm pack");
-  const packOut = execFileSync(npm, ["pack", "--json", "--pack-destination", work], { cwd: pkgDir, encoding: "utf8" });
+  const packOut = npm(["pack", "--json", "--pack-destination", work], { cwd: pkgDir, encoding: "utf8" });
   const [info] = JSON.parse(packOut);
   const tarball = join(work, info.filename);
   const files = info.files.map((f) => f.path);
@@ -33,16 +37,18 @@ try {
 
   console.log("• Installing tarball into an empty project");
   const project = join(work, "consumer");
-  execFileSync("mkdir", ["-p", project]);
+  mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: "consumer", private: true }));
-  execFileSync(npm, ["install", "--no-audit", "--no-fund", "--silent", tarball], { cwd: project, stdio: "inherit" });
-  const bin = join(project, "node_modules/.bin/create-talorys");
-  assert.ok(existsSync(bin), "bin linked");
+  npm(["install", "--no-audit", "--no-fund", "--silent", tarball], { cwd: project, stdio: "inherit" });
+  const shim = join(project, "node_modules/.bin", process.platform === "win32" ? "create-talorys.cmd" : "create-talorys");
+  assert.ok(existsSync(shim), "bin linked");
+  // Run the installed CLI through node: Windows .cmd shims cannot be spawned without a shell.
+  const cli = join(project, "node_modules/create-talorys/dist/cli.js");
 
-  const help = spawnSync(bin, ["--help"], { encoding: "utf8" });
+  const help = spawnSync(process.execPath, [cli, "--help"], { encoding: "utf8" });
   assert.equal(help.status, 0);
   assert.match(help.stdout, /npx create-talorys@latest/);
-  const version = spawnSync(bin, ["--version"], { encoding: "utf8" });
+  const version = spawnSync(process.execPath, [cli, "--version"], { encoding: "utf8" });
   assert.equal(version.stdout.trim(), JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")).version);
 
   console.log("• Bundled Wrangler resolves");
@@ -69,7 +75,7 @@ try {
     new Promise((resolve) => {
       const child = (async () => {
         const { spawn } = await import("node:child_process");
-        const p = spawn(bin, args, {
+        const p = spawn(process.execPath, [cli, ...args], {
           cwd: work,
           env: {
             ...process.env,
