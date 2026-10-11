@@ -11,7 +11,7 @@ import type { AgentEvent, AIProvider, GenerateRequest, ToolRequest } from "../sr
 import { invalidateSemanticCache, semanticExtensions } from "../src/semantic";
 import { deleteSemanticConfig, readSemanticConfig, writeSemanticConfig } from "../src/semantic/config";
 import { dropSemanticData } from "../src/semantic/migrations";
-import { createSemanticContext, hybridSearch } from "../src/semantic/recall";
+import { NEWER_WINS_NOTE, createSemanticContext, hybridSearch } from "../src/semantic/recall";
 import type { Services } from "../src/services/container";
 import type { Env } from "../src/env";
 
@@ -53,6 +53,19 @@ function memoryBlock(memories: Memory[]): string[] {
 }
 
 const lineFor = (lines: string[], needle: string) => lines.findIndex((l) => l.includes(needle));
+
+const NOTE_LINE = `- [other] ${NEWER_WINS_NOTE}`;
+
+/** Enabled blocks end with the newer-wins note once two or more memories are listed, and never carry it otherwise. */
+function assertNote(c: GoldenCase, lines: string[]) {
+  const memoryLines = lines.filter((l) => l !== NOTE_LINE);
+  if (memoryLines.length >= 2) {
+    expect(lines.at(-1), `${c.id}: newer-wins note is not the last line`).toBe(NOTE_LINE);
+    expect(lines.length).toBe(memoryLines.length + 1);
+  } else {
+    expect(lines).not.toContain(NOTE_LINE);
+  }
+}
 
 /** Replays one enabled case and returns the rendered memory block plus the vector hits of the query. */
 async function replay(c: GoldenCase, memories: GoldenCase["memories"]) {
@@ -123,6 +136,7 @@ describe("golden recall replay", () => {
         const memories = category ? c.memories.map((m, i) => (i === 0 ? { ...m, category } : m)) : c.memories;
         const { lines, vectorHits } = await replay(c, memories);
         assertBlock(c, memories, lines);
+        assertNote(c, lines);
         if (c.expect.noVectorHits) expect(vectorHits, `${c.id}: vector hits passed the floor`).toEqual([]);
       });
     }
@@ -139,6 +153,7 @@ describe("golden recall replay", () => {
       const expected = memoryBlock(selectRelevantMemories(s.memories, c.query));
       assertBlock(c, c.memories, expected);
       for (const line of expected) expect(line).not.toContain("(saved ");
+      expect(expected).not.toContain(NOTE_LINE);
 
       const upstream = new RecordingProvider();
       const hooked = new RecordingProvider();

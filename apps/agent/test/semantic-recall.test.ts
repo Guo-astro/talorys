@@ -6,7 +6,17 @@ import { DEFAULT_SEMANTIC_CONFIG, type SemanticConfig, deleteSemanticConfig } fr
 import { type Embedder, MockEmbedder, embeddingsToday } from "../src/semantic/embeddings";
 import { runIndexer } from "../src/semantic/indexer";
 import { dropSemanticData } from "../src/semantic/migrations";
-import { type SemanticContext, applyM1, hybridSearch, rrf, savedDate, selectSemanticMemories } from "../src/semantic/recall";
+import { estimateTokens } from "../src/ai/provider";
+import {
+  MAX_RELEVANT_MEMORIES,
+  NEWER_WINS_NOTE,
+  type SemanticContext,
+  applyM1,
+  hybridSearch,
+  rrf,
+  savedDate,
+  selectSemanticMemories,
+} from "../src/semantic/recall";
 import { UsageService } from "../src/services/usage";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
 
@@ -221,6 +231,7 @@ describe("selectSemanticMemories", () => {
         expect(selected.map((m) => m.content)).toEqual([
           "(saved 2026-10-10) Prefers window seats",
           "(saved 2026-10-01) Drives a Tesla Model 3",
+          NEWER_WINS_NOTE,
         ]);
         expect(s.memories.get(tesla.id)!.content).toBe("Drives a Tesla Model 3");
       } finally {
@@ -235,15 +246,39 @@ describe("selectSemanticMemories", () => {
       for (let i = 0; i < 10; i++) s.memories.create({ content: `Hiking spot number ${i}`, category: "fact" });
       s.memories.create({ content: "Prefers hiking at dawn", category: "preference" });
       const selected = await selectSemanticMemories(ctx, "hiking");
-      expect(selected).toHaveLength(8);
-      expect(new Set(selected.map((m) => m.id)).size).toBe(8);
+      expect(selected).toHaveLength(MAX_RELEVANT_MEMORIES + 1);
+      expect(new Set(selected.slice(0, -1).map((m) => m.id)).size).toBe(MAX_RELEVANT_MEMORIES);
+      expect(selected.at(-1)!.content).toBe(NEWER_WINS_NOTE);
 
       s.memories.clear();
       s.memories.create({ content: "Hiking spot number 1", category: "fact" });
       const p = s.memories.create({ content: "Prefers hiking at dawn", category: "preference" });
       const few = await selectSemanticMemories(ctx, "hiking");
       expect(few.filter((m) => m.id === p.id)).toHaveLength(1);
-      expect(few).toHaveLength(2);
+      expect(few).toHaveLength(3);
     });
+  });
+
+  it("appends the undated newer-wins note last only after two or more memories", async () => {
+    await inAgent(async (a) => {
+      const { ctx, s } = context(a, {}, null);
+      expect(await selectSemanticMemories(ctx, "hiking")).toEqual([]);
+
+      s.memories.create({ content: "Hiking spot number 1", category: "fact" });
+      const one = await selectSemanticMemories(ctx, "hiking");
+      expect(one).toHaveLength(1);
+      expect(one.map((m) => m.content)).not.toContain(NEWER_WINS_NOTE);
+
+      s.memories.create({ content: "Hiking spot number 2", category: "fact" });
+      const two = await selectSemanticMemories(ctx, "hiking");
+      expect(two).toHaveLength(3);
+      expect(two.at(-1)).toMatchObject({ content: NEWER_WINS_NOTE, category: "other" });
+      expect(two.filter((m) => m.content === NEWER_WINS_NOTE)).toHaveLength(1);
+      expect(s.memories.count()).toBe(2);
+    });
+  });
+
+  it("keeps the note within twenty tokens", () => {
+    expect(estimateTokens(NEWER_WINS_NOTE)).toBeLessThanOrEqual(20);
   });
 });

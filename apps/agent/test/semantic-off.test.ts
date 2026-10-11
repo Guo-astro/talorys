@@ -7,6 +7,7 @@ import { AgentRunner } from "../src/agent/runner";
 import type { AgentEvent, AIProvider, GenerateRequest, ToolRequest } from "../src/ai/provider";
 import { invalidateSemanticCache, semanticExtensions } from "../src/semantic";
 import { deleteSemanticConfig, writeSemanticConfig } from "../src/semantic/config";
+import { NEWER_WINS_NOTE } from "../src/semantic/recall";
 import { dropSemanticData, semanticTableNames } from "../src/semantic/migrations";
 import type { Services } from "../src/services/container";
 import type { Env } from "../src/env";
@@ -131,6 +132,33 @@ describe("semantic recall off", () => {
       expect(upstream.calls[0]!.system).toContain("- [preference] Prefers green tea in the morning");
     });
     await memoriesEqualUpstream();
+    await inAgent((agent) => resetSemantic(agent.services));
+  });
+
+  it("adds the newer-wins note after two or more memories only when enabled", async () => {
+    await inAgent(async (agent) => {
+      const s = agent.services;
+      resetSemantic(s);
+      s.memories.clear();
+      s.memories.create({ content: "Prefers green tea in the morning", category: "preference" });
+      s.memories.create({ content: "Prefers oolong tea after lunch", category: "preference" });
+      const off = semanticExtensions(s, workerEnv);
+      expect(off).toBeUndefined();
+      const upstream = new RecordingProvider();
+      const unhooked = new RecordingProvider();
+      await chatOnce(new AgentRunner(s, upstream), "what tea do I like");
+      await chatOnce(new AgentRunner(s, unhooked, off), "what tea do I like");
+      expect(unhooked.calls[0]!.system).toBe(upstream.calls[0]!.system);
+      expect(upstream.calls[0]!.system).not.toContain(NEWER_WINS_NOTE);
+
+      writeSemanticConfig(s.settings, { enabled: true }, s.db);
+      invalidateSemanticCache(s);
+      const hooked = new RecordingProvider();
+      await chatOnce(new AgentRunner(s, hooked, semanticExtensions(s, workerEnv)), "what tea do I like");
+      const lines = hooked.calls[0]!.system.split("\n").filter((l) => l.startsWith("- ["));
+      expect(lines).toHaveLength(3);
+      expect(lines.at(-1)).toBe(`- [other] ${NEWER_WINS_NOTE}`);
+    });
     await inAgent((agent) => resetSemantic(agent.services));
   });
 

@@ -16,6 +16,8 @@ export const CANDIDATES_PER_LIST = 50;
 export const RRF_K = 60;
 /** Most memories embedded by the lazy index pass before a recall. */
 export const LAZY_INDEX_BATCH = 50;
+/** Appended after two or more recalled memories so the model resolves a conflict by recency. */
+export const NEWER_WINS_NOTE = "If two memories conflict, the more recently saved one is current.";
 
 /** Everything one recall needs: the indexer context plus the owner's services. */
 export interface SemanticContext extends IndexerContext {
@@ -145,8 +147,18 @@ export function applyM1(memories: Memory[], timezone: string): Memory[] {
 }
 
 /**
+ * The newer-wins note as a prompt-only memory line. It is never stored, embedded or
+ * returned by search; it exists only in the list handed to the runner's prompt.
+ */
+export function newerWinsNote(): Memory {
+  const epoch = "1970-01-01T00:00:00.000Z";
+  return { id: "semantic-newer-wins-note", content: NEWER_WINS_NOTE, category: "other", source: "agent", created_at: epoch, updated_at: epoch };
+}
+
+/**
  * The semantic replacement for `selectRelevantMemories`: indexes one lazy batch, takes
  * the top hybrid hits, pads with recent preferences by the upstream rule, then applies M1.
+ * With two or more memories the newer-wins note follows as the last, undated line.
  */
 export async function selectSemanticMemories(ctx: SemanticContext, query: string): Promise<Memory[]> {
   await runIndexer(ctx, { maxEmbed: LAZY_INDEX_BATCH });
@@ -156,5 +168,6 @@ export async function selectSemanticMemories(ctx: SemanticContext, query: string
     if (selected.size >= MAX_RELEVANT_MEMORIES) break;
     selected.set(m.id, m);
   }
-  return applyM1([...selected.values()], ctx.services.settings.get().timezone);
+  const memories = applyM1([...selected.values()], ctx.services.settings.get().timezone);
+  return memories.length >= 2 ? [...memories, newerWinsNote()] : memories;
 }
