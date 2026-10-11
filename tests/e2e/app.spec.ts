@@ -31,6 +31,28 @@ test.describe("Talorys owner experience", () => {
     await expect(page.getByRole("heading", { name: "add task e2e review the roadmap" })).toBeVisible();
   });
 
+  test("deleting through chat waits for the owner to approve the exact task", async ({ page }) => {
+    await login(page);
+    const composer = page.getByRole("textbox", { name: "Message", exact: true });
+    await composer.fill("add task e2e approve-me");
+    await page.keyboard.press("Enter");
+    await expect(page.getByText('Added the task "e2e approve-me".')).toBeVisible();
+    // The reply text lands before the turn finishes; the composer ignores Enter until it does.
+    await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+    await composer.fill("delete task e2e approve-me");
+    await page.keyboard.press("Enter");
+    const card = page.getByRole("group", { name: "Approval needed" });
+    await expect(card.getByText("Delete task “e2e approve-me”?")).toBeVisible();
+    await expect(page.getByText(`I've asked to delete "e2e approve-me". Approve it above if you want it gone.`)).toBeVisible();
+    // The card survives a reload and nothing has been deleted yet.
+    await page.reload();
+    await expect(card.getByText("Delete task “e2e approve-me”?")).toBeVisible();
+    await card.getByRole("button", { name: "Approve" }).click();
+    await expect(page.getByText(/Delete task “e2e approve-me” · Approved and done/)).toBeVisible();
+    await page.getByRole("link", { name: "Tasks" }).first().click();
+    await expect(page.getByText("e2e approve-me")).toHaveCount(0);
+  });
+
   test("conversations can be renamed and deleted", async ({ page }) => {
     await login(page);
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("list tasks");
@@ -61,6 +83,11 @@ test.describe("Talorys owner experience", () => {
     await page.getByLabel("Title").fill("e2e water the plants twice");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("e2e water the plants twice")).toBeVisible();
+    await page.getByText("e2e water the plants twice").click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByRole("dialog")).toContainText("“e2e water the plants twice” will be permanently deleted.");
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByText("e2e water the plants twice")).toHaveCount(0);
   });
 
   test("memories can be added, searched, edited and deleted", async ({ page }) => {
@@ -88,6 +115,28 @@ test.describe("Talorys owner experience", () => {
     await expect(page.getByRole("heading", { name: "Bring" })).toBeVisible();
     await page.getByLabel("Search notes").fill("passport");
     await expect(page.getByRole("button", { name: /e2e Packing list/ })).toBeVisible();
+  });
+
+  test("note autosave settles and edits survive switching notes", async ({ page }) => {
+    await login(page);
+    await page.getByRole("link", { name: "Notes" }).first().click();
+    await page.getByRole("button", { name: "New note" }).click();
+    // A title with surrounding spaces is stored trimmed; autosave must not loop.
+    await page.getByLabel("Note title").fill("  e2e Spaced title  ");
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+    let patches = 0;
+    page.on("request", (r) => {
+      if (r.method() === "PATCH" && r.url().includes("/api/notes/")) patches++;
+    });
+    await page.waitForTimeout(2500);
+    expect(patches).toBe(0);
+
+    // Typing then switching notes immediately (before autosave fires) keeps the edit.
+    await page.getByRole("button", { name: "New note" }).click();
+    await expect(page.getByLabel("Note title")).toHaveValue("Untitled");
+    await page.getByLabel("Note title").fill("e2e Quick switch");
+    await page.getByRole("button", { name: /e2e Spaced title/ }).click();
+    await expect(page.getByRole("button", { name: /e2e Quick switch/ })).toBeVisible();
   });
 
   test("notes support todos that can be toggled", async ({ page }) => {

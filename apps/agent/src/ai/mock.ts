@@ -80,6 +80,9 @@ function planTools(text: string): PlannedCall[] {
   if ((m = text.match(/^(?:complete|finish|mark) (?:the )?task\s+(.+?)(?: as (?:done|completed))?$/i))) {
     return [{ name: "complete_task", input: { task: m[1] }, describe: () => `Marked "${m![1]}" as done.` }];
   }
+  if ((m = text.match(/^(?:delete|remove) (?:the )?task\s+(.+)$/i))) {
+    return [{ name: "delete_task", input: { task: m[1] }, describe: () => `I've asked to delete "${m![1]}". Approve it above if you want it gone.` }];
+  }
   if (/^(?:list|show)(?: my)? tasks|what should i work on/i.test(text)) {
     return [
       {

@@ -14,7 +14,9 @@ export { TalorysAgent } from "./agent/talorys-agent";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/") && url.pathname !== "/api") {
+    // A "sub" path segment is the Agents SDK's sub-agent routing marker; Talorys has no sub-agents.
+    const isSubAgentPath = url.pathname.split("/").includes("sub");
+    if ((!url.pathname.startsWith("/api/") && url.pathname !== "/api") || isSubAgentPath) {
       return Response.json({ error: { code: "NOT_FOUND", message: "Not found" } }, { status: 404 });
     }
     // WebSocket upgrades are not part of the API surface.

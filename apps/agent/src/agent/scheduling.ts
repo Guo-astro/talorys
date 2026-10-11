@@ -79,12 +79,17 @@ export class AutomationService {
     this.activity.record("automation.deleted", `Deleted automation “${existing.name}”`);
   }
 
-  /** Re-arms every enabled automation, e.g. after a timezone change. */
+  /**
+   * Re-arms every enabled automation, e.g. after a timezone change or an import.
+   * Disabled automations that still hold a schedule (e.g. disabled by an import) are disarmed.
+   */
   async rearmAll(): Promise<void> {
     for (const a of this.repo.list()) {
-      if (!a.enabled) continue;
       await this.disarm(a);
-      await this.arm(a);
+      if (a.enabled) await this.arm(a);
+      else if (a.schedule_id || a.status === "scheduled") {
+        this.repo.update(a.id, { status: "paused", next_run: null, schedule_id: null });
+      }
     }
   }
 

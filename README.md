@@ -80,7 +80,7 @@ npx create-talorys@latest
 
 The installer:
 
-1. Checks Node.js (20.18+) and uses its bundled Wrangler CLI (any globally installed `wrangler`/`cf` is detected but not required).
+1. Checks Node.js (22+) and uses its bundled Wrangler CLI (any globally installed `wrangler`/`cf` is detected but not required).
 2. Verifies your Cloudflare login, or **opens Cloudflare's authorization page in your browser**.
 3. Lets you choose an account (if you have several) and an agent name.
 4. Asks for an owner password (hidden input, strength-checked). It is hashed locally with PBKDF2-SHA256 and stored only as a Cloudflare secret.
@@ -159,7 +159,7 @@ Simple reminders and task digests never use AI. The Usage panel shows local
 
 ## 8. Local development
 
-Requirements: Node.js 20.18+.
+Requirements: Node.js 22+.
 
 ```bash
 git clone https://github.com/rociiu/talorys.git

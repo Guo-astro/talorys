@@ -170,7 +170,10 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      onClose={onClose}
+      // Only user-initiated closes; the effect's own el.close() (open → false) must not re-trigger onClose.
+      onClose={() => {
+        if (open) onClose();
+      }}
       onCancel={(e) => {
         e.preventDefault();
         onClose();

@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DO_MIGRATIONS, generateAgentConfig, generateInstallationId, generatePagesConfig, resourceNames, toJsonc } from "../src/config";
-import { sanitize, explainWranglerFailure } from "../src/errors";
+import { CliError, sanitize, explainWranglerFailure } from "../src/errors";
+import { checkNodeVersion, MIN_NODE } from "../src/requirements";
 import { writeManifest, type Manifest } from "../src/manifest";
 import { parseJsonOutput } from "../src/wrangler";
 import { runChecks } from "../src/verify";
@@ -86,5 +87,15 @@ describe("post-deploy verification", () => {
       new URL(url).pathname === "/api/tasks" ? Response.json({ tasks: [] }) : fakeSite()(url)) as typeof fetch;
     const checks = await runChecks("https://x.pages.dev", open);
     expect(checks.find((c) => c.name.includes("anonymous"))?.ok).toBe(false);
+  });
+});
+
+describe("requirements", () => {
+  it("requires at least the Node.js version the bundled Wrangler needs", () => {
+    const wranglerPkg = JSON.parse(readFileSync(join(__dirname, "../../../node_modules/wrangler/package.json"), "utf8"));
+    const [major = 0, minor = 0] = String(wranglerPkg.engines.node).replace(/^>=\s*/, "").split(".").map(Number);
+    expect(MIN_NODE[0] > major || (MIN_NODE[0] === major && MIN_NODE[1] >= minor)).toBe(true);
+    expect(() => checkNodeVersion("20.18.0")).toThrow(CliError);
+    expect(() => checkNodeVersion("22.0.0")).not.toThrow();
   });
 });

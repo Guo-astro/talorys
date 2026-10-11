@@ -55,7 +55,6 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
   const d = backup.data;
   const db = s.db;
   const now = new Date().toISOString();
-  const importedAutomations: string[] = [];
 
   const summary = db.transaction((): ImportSummary => {
     for (const p of d.projects) {
@@ -125,7 +124,6 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
         a.id, a.name, kind, str(a.message), JSON.stringify(schedule.data), enabled ? 1 : 0, enabled ? "scheduled" : "paused",
         str(a.created_at, now), now,
       );
-      if (enabled) importedAutomations.push(a.id);
       automations++;
     }
     if (d.settings && Object.keys(d.settings).length > 0) {
@@ -143,8 +141,8 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
     };
   });
 
-  // Arm imported schedules outside the data transaction (SDK schedules are separate rows).
-  if (importedAutomations.length > 0) await s.automations.rearmAll();
+  // Arm (or disarm) imported schedules outside the data transaction (SDK schedules are separate rows).
+  if (summary.automations > 0) await s.automations.rearmAll();
   s.activity.record("data.imported", `Imported backup from ${backup.exported_at}`);
   return summary;
 }

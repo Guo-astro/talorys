@@ -1,4 +1,4 @@
-import { getZonedParts, zonedTimeToUtc } from "@talorys/shared";
+import { getZonedParts, isValidCalendarDate, zonedTimeToUtc } from "@talorys/shared";
 
 const LOCAL_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?$/;
 
@@ -13,6 +13,8 @@ export function parseLocalDateTime(value: string, timeZone: string): string | nu
   if (m) {
     const [, y, mo, d, h, mi] = m;
     const hasTime = h !== undefined;
+    if (!isValidCalendarDate(Number(y), Number(mo), Number(d))) return null;
+    if (hasTime && (Number(h) > 23 || Number(mi) > 59)) return null;
     const date = zonedTimeToUtc(Number(y), Number(mo), Number(d), hasTime ? Number(h) : 23, hasTime ? Number(mi) : 59, timeZone);
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }

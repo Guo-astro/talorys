@@ -69,12 +69,26 @@ export interface Conversation {
   message_count?: number;
 }
 
+export type PendingActionStatus = "pending" | "approved" | "cancelled" | "expired" | "failed";
+
+/** A destructive action the agent proposed. It runs only when the owner approves it in the UI. */
+export interface PendingAction {
+  id: string;
+  /** Server-written description of the exact target, e.g. `Delete task “Buy milk”`. */
+  summary: string;
+  status: PendingActionStatus;
+  error: string | null;
+  expires_at: string;
+}
+
 export interface ToolActivity {
   id: string;
   name: string;
   label: string;
   status: "running" | "success" | "error";
   error?: string;
+  /** Set when a destructive tool call is waiting for (or got) the owner's approval. */
+  approval?: PendingAction;
 }
 
 export interface ChatMessage {
@@ -170,7 +184,9 @@ export const memoryCreateSchema = z.object({
   content: shortText(2000),
   category: z.enum(MEMORY_CATEGORIES).optional().default("other"),
 });
-export const memoryUpdateSchema = memoryCreateSchema.partial();
+// Update schemas are declared without defaults: `.partial()` on a schema with
+// `.default()` would fill omitted fields and silently overwrite stored values.
+export const memoryUpdateSchema = z.object({ content: shortText(2000), category: z.enum(MEMORY_CATEGORIES) }).partial();
 
 export const noteCreateSchema = z.object({
   title: shortText(300),
@@ -186,7 +202,9 @@ export const projectCreateSchema = z.object({
   description: z.string().max(5000).optional().default(""),
   status: z.enum(PROJECT_STATUSES).optional().default("active"),
 });
-export const projectUpdateSchema = projectCreateSchema.partial();
+export const projectUpdateSchema = z
+  .object({ name: shortText(200), description: z.string().max(5000), status: z.enum(PROJECT_STATUSES) })
+  .partial();
 
 export const conversationCreateSchema = z.object({ title: z.string().trim().max(200).optional() });
 export const conversationUpdateSchema = z.object({ title: shortText(200) });

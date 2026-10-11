@@ -1,13 +1,14 @@
 import { runDurableObjectAlarm } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { agentStub, inAgent, loggedIn, readSse } from "./helpers";
-import { ALL_TOOLS, ToolExecutor } from "../src/tools";
+import { ALL_TOOLS, runApprovedAction, ToolExecutor } from "../src/tools";
 import { AgentRunner } from "../src/agent/runner";
 import type { AgentEvent, AIProvider, GenerateRequest, ToolRequest } from "../src/ai/provider";
 import { classifyAiError } from "../src/ai/provider";
 import { MIGRATIONS, migrate, schemaVersion } from "../src/db/migrations";
 import { buildContextWindow } from "../src/agent/memory";
 import { buildSystemPrompt } from "../src/agent/prompt";
+import { parseLocalDateTime } from "../src/services/time";
 
 /** A provider that replays a scripted sequence of tool calls, to exercise limits deterministically. */
 class ScriptedProvider implements AIProvider {
@@ -56,7 +57,7 @@ async function runTurn(provider: AIProvider, message: string) {
 describe("tool execution limits", () => {
   it("validates input, caps calls and blocks duplicate loops", async () => {
     await inAgent(async (agent) => {
-      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "hi" }, { maxToolCalls: 3 });
+      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat" }, { maxToolCalls: 3 });
       await expect(ex.execute("create_task", { title: "" })).rejects.toThrow(/Invalid input/);
       await expect(ex.execute("run_shell", { cmd: "rm -rf /" })).rejects.toThrow(/not available/);
       await ex.execute("list_tasks", {});
@@ -70,7 +71,7 @@ describe("tool execution limits", () => {
 
   it("enforces per-tool caps", async () => {
     await inAgent(async (agent) => {
-      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "" }, { maxToolCalls: 20 });
+      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat" }, { maxToolCalls: 20 });
       for (let i = 0; i < 5; i++) await ex.execute("create_task", { title: `bulk ${i}` });
       await expect(ex.execute("create_task", { title: "one too many" })).rejects.toThrow(/already used/);
       for (const t of agent.services.tasks.list({ q: "bulk" })) agent.services.tasks.delete(t.id);
@@ -79,7 +80,7 @@ describe("tool execution limits", () => {
 
   it("disables all tools when the limit is 0", async () => {
     await inAgent((agent) => {
-      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "" }, { maxToolCalls: 0 });
+      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat" }, { maxToolCalls: 0 });
       expect(ex.available()).toHaveLength(0);
     });
   });
@@ -96,32 +97,61 @@ describe("tool execution limits", () => {
 });
 
 describe("prompt-injection and destructive-action defenses", () => {
-  it("refuses destructive tools without explicit owner confirmation", async () => {
+  it("destructive tools only propose an action; nothing changes until the owner approves that exact action", async () => {
     await inAgent(async (agent) => {
-      const task = agent.services.tasks.create({ title: "Keep me" });
-      // A note's content tries to make the model delete things; the owner never confirmed.
-      const injected = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "summarize my notes" }, { maxToolCalls: 5 });
-      await expect(injected.execute("delete_task", { task: task.id, confirmed: true })).rejects.toThrow(/destructive/);
+      const s = agent.services;
+      const conversation = s.conversations.create("Cleanup");
+      const task = s.tasks.create({ title: "Keep me" });
+      const ex = new ToolExecutor(ALL_TOOLS, { services: s, timezone: "UTC", mode: "chat", conversationId: conversation.id }, { maxToolCalls: 5 });
+
+      // Whatever the model passes (including the old `confirmed` flag), the call only creates a proposal.
+      const result = (await ex.execute("delete_task", { task: task.id, confirmed: true }, "call_1")) as { status: string };
+      expect(result.status).toBe("awaiting_owner_approval");
+      expect(s.tasks.get(task.id)).not.toBeNull();
+      const action = ex.approvalFor("call_1")!;
+      expect(action).toMatchObject({ status: "pending", summary: "Delete task “Keep me”" });
+
+      // Unknown targets are rejected up front instead of producing an approval card.
+      await expect(ex.execute("cancel_automation", { id: "missing" }, "call_2")).rejects.toThrow(/not found/);
+      expect(ex.approvalFor("call_2")).toBeUndefined();
+
+      // Approval runs the stored target exactly once.
+      const ctx = { services: s, timezone: "UTC", mode: "chat" as const };
+      expect((await runApprovedAction(ALL_TOOLS, ctx, action.id)).status).toBe("approved");
+      expect(s.tasks.get(task.id)).toBeNull();
+      await expect(runApprovedAction(ALL_TOOLS, ctx, action.id)).rejects.toThrow(/already handled/);
+
+      // A declined proposal can no longer be approved.
+      const note = s.notes.create({ title: "Plans", content: "x" });
+      await ex.execute("delete_note", { id: note.id }, "call_3");
+      const declined = ex.approvalFor("call_3")!;
+      s.pendingActions.resolve(declined.id, "cancelled");
+      await expect(runApprovedAction(ALL_TOOLS, ctx, declined.id)).rejects.toThrow(/already handled/);
+      expect(s.notes.get(note.id)).not.toBeNull();
+
+      // Expired proposals can't be approved either.
+      const memory = s.memories.create({ content: "Likes tea", category: "preference", source: "manual" });
+      await ex.execute("forget_memory", { id: memory.id }, "call_4");
+      const stale = ex.approvalFor("call_4")!;
+      s.db.run(`UPDATE tal_pending_actions SET expires_at = ? WHERE id = ?`, new Date(Date.now() - 1000).toISOString(), stale.id);
+      expect(s.pendingActions.view(stale.id)?.status).toBe("expired");
+      await expect(runApprovedAction(ALL_TOOLS, ctx, stale.id)).rejects.toThrow(/expired/);
+      expect(s.memories.get(memory.id)).not.toBeNull();
+    });
+  });
+
+  it("destructive tools are unavailable outside a chat conversation", async () => {
+    await inAgent(async (agent) => {
+      const task = agent.services.tasks.create({ title: "No conversation" });
+      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat" }, { maxToolCalls: 5 });
+      await expect(ex.execute("delete_task", { task: task.id })).rejects.toThrow(/only be used in chat/);
       expect(agent.services.tasks.get(task.id)).not.toBeNull();
-      // With the owner's explicit confirmation it proceeds.
-      const confirmed = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "yes, delete it" }, { maxToolCalls: 5 });
-      await expect(confirmed.execute("delete_task", { task: task.id })).rejects.toThrow(/destructive/); // still needs confirmed flag
-      await confirmed.execute("delete_task", { task: task.id, confirmed: true });
-
-      // The request itself ("delete ...") is not a confirmation.
-      const task2 = agent.services.tasks.create({ title: "Also keep me" });
-      const request = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "delete the task Also keep me" }, { maxToolCalls: 5 });
-      await expect(request.execute("delete_task", { task: task2.id, confirmed: true })).rejects.toThrow(/destructive/);
-
-      // Cancelling an unknown automation reports an error instead of succeeding.
-      await expect(confirmed.execute("cancel_automation", { id: "missing", confirmed: true })).rejects.toThrow(/not found/);
-      expect(agent.services.tasks.get(task.id)).toBeNull();
     });
   });
 
   it("scheduled runs only get read-only tools plus notifications", async () => {
     await inAgent((agent) => {
-      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "scheduled", ownerMessage: "" }, { maxToolCalls: 5 });
+      const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "scheduled" }, { maxToolCalls: 5 });
       const names = ex.available().map((t) => t.name);
       expect(names).toContain("list_tasks");
       expect(names).toContain("notify_owner");
@@ -171,6 +201,27 @@ describe("AI failure handling", () => {
     const done = events.at(-1) as any;
     expect(done.message.status).toBe("error");
     expect(done.message.error).toMatch(/Workers AI allocation/);
+  });
+
+  it("records a turn cancelled mid-stream as cancelled, not complete", async () => {
+    const controller = new AbortController();
+    // Like the AI SDK's streamText: on abort the stream just ends, without throwing.
+    const provider = new ScriptedProvider([]);
+    provider.generateWithTools = async function* () {
+      yield { type: "text", delta: "Partial " };
+      controller.abort();
+    };
+    const { done, stored } = await inAgent(async (agent) => {
+      const runner = new AgentRunner(agent.services, provider);
+      const events = [];
+      for await (const e of runner.chat({ message: "plan my week", signal: controller.signal })) events.push(e);
+      const done = events.at(-1) as any;
+      return { done, stored: agent.services.conversations.lastMessage(done.message.conversation_id) };
+    });
+    expect(done.type).toBe("done");
+    expect(done.message.status).toBe("cancelled");
+    expect(stored?.status).toBe("cancelled");
+    expect(stored?.content).toBe("Partial ");
   });
 });
 
@@ -261,6 +312,12 @@ describe("scheduling", () => {
     const c = await loggedIn();
     expect((await c.call("/api/automations", { method: "POST", body: { name: "x", kind: "reminder", message: "x", schedule: { type: "once", at: "2001-01-01T09:00" } } })).status).toBe(400);
     expect((await c.call("/api/automations", { method: "POST", body: { name: "x", kind: "reminder", message: "x", schedule: { type: "interval", minutes: 1 } } })).status).toBe(400);
+    // Impossible dates are rejected instead of rolling over into the next month.
+    expect((await c.call("/api/automations", { method: "POST", body: { name: "x", kind: "reminder", message: "x", schedule: { type: "once", at: "2099-02-31T09:00" } } })).status).toBe(400);
+    expect(parseLocalDateTime("2099-02-30", "UTC")).toBeNull();
+    expect(parseLocalDateTime("2099-13-01", "UTC")).toBeNull();
+    expect(parseLocalDateTime("2099-01-01T24:30", "UTC")).toBeNull();
+    expect(parseLocalDateTime("2096-02-29", "UTC")).toBe("2096-02-29T23:59:00.000Z");
   });
 
   it("reconciles lost schedules after a restart", async () => {

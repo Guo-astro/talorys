@@ -50,13 +50,26 @@ export function useConversations(q?: string) {
 export function useConversation(id: string | undefined) {
   return useQuery({
     queryKey: keys.conversation(id ?? ""),
-    queryFn: () => api<{ conversation: Conversation; messages: ChatMessage[] }>(`/conversations/${id}`),
+    queryFn: () => api<{ conversation: Conversation; messages: ChatMessage[]; streaming?: boolean }>(`/conversations/${id}`),
     enabled: !!id,
+    // A reply started elsewhere (another tab, or before a reload) is still generating: poll until it lands.
+    refetchInterval: (query) => (query.state.data?.streaming ? 1500 : false),
   });
 }
 
 export function useTasks() {
-  return useQuery({ queryKey: keys.tasks, queryFn: () => api<{ tasks: Task[] }>("/tasks?limit=500").then((r) => r.tasks) });
+  // Open and completed tasks are fetched separately so a long completed history can't push
+  // open tasks past the page limit.
+  return useQuery({
+    queryKey: keys.tasks,
+    queryFn: async () => {
+      const [open, completed] = await Promise.all([
+        api<{ tasks: Task[] }>("/tasks?status=open&limit=500"),
+        api<{ tasks: Task[] }>("/tasks?view=completed&limit=200"),
+      ]);
+      return [...open.tasks, ...completed.tasks];
+    },
+  });
 }
 
 export function useMemories(q?: string) {
