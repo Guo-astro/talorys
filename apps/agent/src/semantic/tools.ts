@@ -1,6 +1,6 @@
 import { ALL_TOOLS, type ToolContext, type ToolDefinition } from "../tools";
 import { purgeVector, startBackgroundIndex } from "./indexer";
-import { type SemanticContext, hybridSearch, savedDate } from "./recall";
+import { type SemanticContext, hybridSearch, savedAt } from "./recall";
 
 const SEARCH_MEMORY_LIMIT = 10;
 const SEARCH_ALL_MEMORY_LIMIT = 5;
@@ -21,7 +21,7 @@ function wrapSearchMemories(sem: SemanticContext): ToolDefinition {
       const timezone = ctx.services.settings.get().timezone;
       const hits = await hybridSearch(sem, query, { limit: SEARCH_MEMORY_LIMIT });
       return {
-        memories: hits.map(({ memory: m }) => ({ id: m.id, content: m.content, category: m.category, saved: savedDate(m.updated_at, timezone) })),
+        memories: hits.map(({ memory: m }) => ({ id: m.id, content: m.content, category: m.category, saved: savedAt(m.updated_at, timezone) })),
       };
     },
   };
@@ -37,7 +37,7 @@ function wrapSearch(sem: SemanticContext): ToolDefinition {
       const result = (await base.execute(raw, ctx)) as Record<string, unknown>;
       const timezone = ctx.services.settings.get().timezone;
       const hits = await hybridSearch(sem, query, { limit: SEARCH_ALL_MEMORY_LIMIT });
-      return { ...result, memories: hits.map(({ memory: m }) => ({ id: m.id, content: m.content, saved: savedDate(m.updated_at, timezone) })) };
+      return { ...result, memories: hits.map(({ memory: m }) => ({ id: m.id, content: m.content, saved: savedAt(m.updated_at, timezone) })) };
     },
   };
 }

@@ -61,15 +61,17 @@ module itself fails, chat falls back to upstream recall.
 ## Newest first (M1)
 
 The selected memories are ordered newest first by last update, and each line
-starts with the date it was saved in the owner's timezone:
+starts with the date, 24-hour time and short zone it was saved in, in the owner's
+timezone:
 
 ```
-- [fact] (saved 2026-10-10) I just traded my bug in for a 2025 Tesla.
-- [fact] (saved 2026-03-02) I drive a VW Bug.
+- [fact] (saved 2026-10-10 20:31 PDT) I just traded my VW bug away and got a 2025 Tesla.
+- [fact] (saved 2026-03-02 09:14 PST) I drive a VW Bug.
 ```
 
 That lets the model prefer the newer of two conflicting memories without any
-extra bookkeeping. The date costs about 5 tokens per memory.
+extra bookkeeping, even for two memories saved minutes apart on the same day.
+The prefix costs about 10 tokens per memory.
 
 ## Budgets
 

@@ -60,7 +60,7 @@ describe("semantic tools", () => {
       expect(upstream).toEqual({ memories: [] });
       const result = await tool(semanticTools(sem), "search_memories").execute({ query: "my vehicle" }, toolCtx);
       expect(result).toEqual({
-        memories: [{ id: tesla.id, content: "Drives a Tesla Model 3", category: "fact", saved: "2026-10-05" }],
+        memories: [{ id: tesla.id, content: "Drives a Tesla Model 3", category: "fact", saved: "2026-10-05 10:00 UTC" }],
       });
     });
   });
@@ -92,7 +92,7 @@ describe("semantic tools", () => {
       expect(result.memories).toHaveLength(5);
       for (const m of result.memories) {
         expect(Object.keys(m).sort()).toEqual(["content", "id", "saved"]);
-        expect(m.saved).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        expect(m.saved).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/);
       }
       s.tasks.delete(task.id);
     });

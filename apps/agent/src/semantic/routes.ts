@@ -16,7 +16,7 @@ import { MockEmbedder, createEmbedder, embeddingsToday } from "./embeddings";
 import { cachedSemanticConfig, invalidateSemanticCache } from "./index";
 import { type IndexReport, pendingMemories, purgeAllVectors, purgeVector, runIndexer, startBackgroundIndex } from "./indexer";
 import { dropSemanticData, ensureSemanticSchema, semanticSchema } from "./migrations";
-import { LAZY_INDEX_BATCH, createSemanticContext, hybridSearch, savedDate } from "./recall";
+import { LAZY_INDEX_BATCH, createSemanticContext, hybridSearch, savedAt } from "./recall";
 
 /**
  * Semantic recall API, mounted before `systemRoutes` and `dataRoutes` so its `/memories`
@@ -157,7 +157,7 @@ semanticRoutes.get("/semantic/search", async (c) => {
       category: m.category,
       cosine,
       fused,
-      saved: savedDate(m.updated_at, timezone),
+      saved: savedAt(m.updated_at, timezone),
     })),
   });
 });

@@ -24,7 +24,7 @@ import {
   applyM1,
   hybridSearch,
   rrf,
-  savedDate,
+  savedAt,
   selectSemanticMemories,
 } from "../src/semantic/recall";
 import { UsageService } from "../src/services/usage";
@@ -117,22 +117,21 @@ describe("rrf", () => {
   });
 });
 
-describe("savedDate", () => {
-  it("formats the owner's local day", () => {
-    expect(savedDate("2026-10-10T12:00:00Z", "UTC")).toBe("2026-10-10");
-    expect(savedDate("2026-10-10T23:30:00Z", "America/Los_Angeles")).toBe("2026-10-10");
-    expect(savedDate("2026-10-11T06:30:00Z", "America/Los_Angeles")).toBe("2026-10-10");
-    expect(savedDate("2026-10-10T23:30:00Z", "Asia/Tokyo")).toBe("2026-10-11");
+describe("savedAt", () => {
+  it("formats date, 24-hour time and short zone in the owner's timezone", () => {
+    expect(savedAt("2026-10-11T03:31:34Z", "UTC")).toBe("2026-10-11 03:31 UTC");
+    expect(savedAt("2026-10-11T03:31:34Z", "America/Los_Angeles")).toBe("2026-10-10 20:31 PDT");
+    expect(savedAt("2026-01-16T05:30:00Z", "America/Los_Angeles")).toBe("2026-01-15 21:30 PST");
+    expect(savedAt("2026-10-10T23:30:00Z", "Asia/Tokyo")).toBe("2026-10-11 08:30 GMT+9");
   });
 
-  it("gives the previous local day for 23:30 UTC-shifted times west of UTC", () => {
-    // 2026-01-15 23:30 UTC is 2026-01-15 15:30 PST; 2026-01-16 05:30 UTC is still 2026-01-15 in Los Angeles.
-    expect(savedDate("2026-01-16T05:30:00Z", "America/Los_Angeles")).toBe("2026-01-15");
-    expect(savedDate("2026-01-16T05:30:00Z", "UTC")).toBe("2026-01-16");
+  it("renders midnight as 00, not 24", () => {
+    expect(savedAt("2026-10-11T00:05:00Z", "UTC")).toBe("2026-10-11 00:05 UTC");
+    expect(savedAt("2026-10-10T15:05:00Z", "Asia/Tokyo")).toBe("2026-10-11 00:05 GMT+9");
   });
 
   it("falls back to UTC for an invalid timezone", () => {
-    expect(savedDate("2026-10-10T23:30:00Z", "Not/AZone")).toBe("2026-10-10");
+    expect(savedAt("2026-10-10T23:30:00Z", "Not/AZone")).toBe("2026-10-10 23:30 UTC");
   });
 });
 
@@ -147,14 +146,23 @@ describe("applyM1", () => {
     const snapshot = structuredClone(input);
     const out = applyM1(input, "UTC");
     expect(out.map((m) => m.id)).toEqual(["a", "d", "c", "b"]);
-    expect(out[0]!.content).toBe("(saved 2026-03-01) memory a");
-    expect(out[3]!.content).toBe("(saved 2026-01-01) memory b");
+    expect(out[0]!.content).toBe("(saved 2026-03-01 00:00 UTC) memory a");
+    expect(out[3]!.content).toBe("(saved 2026-01-01 00:00 UTC) memory b");
     expect(input).toEqual(snapshot);
   });
 
   it("dates the prefix in the owner's timezone", () => {
     const [m] = applyM1([memory("x", "2026-10-11T06:30:00Z", undefined, "Owns a kayak")], "America/Los_Angeles");
-    expect(m!.content).toBe("(saved 2026-10-10) Owns a kayak");
+    expect(m!.content).toBe("(saved 2026-10-10 23:30 PDT) Owns a kayak");
+  });
+
+  it("orders two same-day memories a minute apart newest first with different times", () => {
+    const bug = memory("bug", "2026-10-11T03:30:17Z", undefined, "My car is a Volkswagen bug from the 1960s.");
+    const tesla = memory("tesla", "2026-10-11T03:31:34Z", undefined, "I just traded my VW bug away and got a 2025 Tesla.");
+    expect(applyM1([bug, tesla], "America/Los_Angeles").map((m) => m.content)).toEqual([
+      "(saved 2026-10-10 20:31 PDT) I just traded my VW bug away and got a 2025 Tesla.",
+      "(saved 2026-10-10 20:30 PDT) My car is a Volkswagen bug from the 1960s.",
+    ]);
   });
 });
 
@@ -401,14 +409,32 @@ describe("selectSemanticMemories", () => {
         const selected = await selectSemanticMemories(ctx, "my vehicle");
         expect(s.db.one<{ n: number }>(`SELECT count(*) AS n FROM tal_semantic_vectors`)!.n).toBe(3);
         expect(selected.map((m) => m.content)).toEqual([
-          "(saved 2026-10-10) Prefers window seats",
-          "(saved 2026-10-01) Drives a Tesla Model 3",
+          "(saved 2026-10-10 23:30 PDT) Prefers window seats",
+          "(saved 2026-10-01 05:00 PDT) Drives a Tesla Model 3",
           NEWER_WINS_NOTE,
         ]);
         expect(s.memories.get(tesla.id)!.content).toBe("Drives a Tesla Model 3");
       } finally {
         s.settings.update({ timezone: "UTC" });
       }
+    });
+  });
+
+  it("keeps the newer-wins note last and undated after timed prefixes", async () => {
+    await inAgent(async (a) => {
+      const { ctx, s } = context(a, {}, null);
+      const bug = s.memories.create({ content: "My car is a Volkswagen bug from the 1960s.", category: "fact" });
+      const tesla = s.memories.create({ content: "I just traded my VW bug away and got a 2025 Tesla.", category: "fact" });
+      setUpdated(a, bug.id, "2026-10-11T03:30:17Z");
+      setUpdated(a, tesla.id, "2026-10-11T03:31:34Z");
+
+      const selected = await selectSemanticMemories(ctx, "VW bug");
+      expect(selected.map((m) => m.content)).toEqual([
+        "(saved 2026-10-11 03:31 UTC) I just traded my VW bug away and got a 2025 Tesla.",
+        "(saved 2026-10-11 03:30 UTC) My car is a Volkswagen bug from the 1960s.",
+        NEWER_WINS_NOTE,
+      ]);
+      expect(selected.at(-1)!.content).not.toContain("(saved ");
     });
   });
 

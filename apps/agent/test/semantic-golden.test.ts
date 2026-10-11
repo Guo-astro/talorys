@@ -91,10 +91,12 @@ function assertBlock(c: GoldenCase, memories: GoldenCase["memories"], lines: str
   }
   if (!c.expect.datePrefix) return;
   for (const needle of c.expect.present) {
-    // The prefix is the updated_at day in the owner's timezone (UTC here), never created_at.
+    // The prefix is the updated_at minute in the owner's timezone (UTC here), never created_at.
     const seeded = memories.find((m) => m.content.includes(needle))!;
     const line = lines[lineFor(lines, needle)]!;
-    expect(line).toBe(`- [${seeded.category}] (saved ${seeded.updated_at.slice(0, 10)}) ${seeded.content}`);
+    const saved = `${seeded.updated_at.slice(0, 10)} ${seeded.updated_at.slice(11, 16)} UTC`;
+    expect(line).toBe(`- [${seeded.category}] (saved ${saved}) ${seeded.content}`);
+    expect(line).toMatch(/^- \[\w+\] \(saved \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\) /);
   }
 }
 

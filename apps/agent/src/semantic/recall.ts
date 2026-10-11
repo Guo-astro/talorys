@@ -192,19 +192,36 @@ export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: numb
   return out;
 }
 
-/** `YYYY-MM-DD` of `iso` in `timeZone`, falling back to UTC for an unknown zone. */
-export function savedDate(iso: string, timeZone: string): string {
-  const opts = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
+const SAVED_AT_OPTS = {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZoneName: "short",
+} as const;
+
+/**
+ * `YYYY-MM-DD HH:MM TZ` of `iso` in `timeZone` on a 24-hour clock with Intl's short zone name
+ * (`PDT`, `UTC`, `GMT+2`), falling back to UTC for an unknown zone. A bare `GMT` reads `UTC`.
+ */
+export function savedAt(iso: string, timeZone: string): string {
+  let format: Intl.DateTimeFormat;
   try {
-    return new Intl.DateTimeFormat("en-CA", { ...opts, timeZone }).format(new Date(iso));
+    format = new Intl.DateTimeFormat("en-CA", { ...SAVED_AT_OPTS, timeZone });
   } catch {
-    return new Intl.DateTimeFormat("en-CA", { ...opts, timeZone: "UTC" }).format(new Date(iso));
+    format = new Intl.DateTimeFormat("en-CA", { ...SAVED_AT_OPTS, timeZone: "UTC" });
   }
+  const part: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const p of format.formatToParts(new Date(iso))) part[p.type] = p.value;
+  const zone = part.timeZoneName === "GMT" ? "UTC" : part.timeZoneName;
+  return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute} ${zone}`;
 }
 
 /**
  * M1 recency: newest update first (then newest creation, then id), each content prefixed
- * with `(saved YYYY-MM-DD) ` in the owner's timezone. Returns copies; inputs are untouched.
+ * with `(saved YYYY-MM-DD HH:MM TZ) ` in the owner's timezone. Returns copies; inputs are untouched.
  */
 export function applyM1(memories: Memory[], timezone: string): Memory[] {
   return [...memories]
@@ -212,7 +229,7 @@ export function applyM1(memories: Memory[], timezone: string): Memory[] {
       (a, b) =>
         compareDesc(a.updated_at, b.updated_at) || compareDesc(a.created_at, b.created_at) || compareAsc(a.id, b.id),
     )
-    .map((m) => ({ ...m, content: `(saved ${savedDate(m.updated_at, timezone)}) ${m.content}` }));
+    .map((m) => ({ ...m, content: `(saved ${savedAt(m.updated_at, timezone)}) ${m.content}` }));
 }
 
 /**

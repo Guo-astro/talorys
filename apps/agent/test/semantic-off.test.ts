@@ -126,7 +126,7 @@ describe("semantic recall off", () => {
       for (const i of [0, 1]) {
         expect(toolShape(hooked.calls[i]!)).toEqual(toolShape(upstream.calls[i]!));
         expect(hooked.calls[i]!.system).toBe(
-          upstream.calls[i]!.system.replace("Prefers green tea", "(saved 2026-03-04) Prefers green tea"),
+          upstream.calls[i]!.system.replace("Prefers green tea", "(saved 2026-03-04 10:00 UTC) Prefers green tea"),
         );
       }
       expect(upstream.calls[0]!.system).toContain("- [preference] Prefers green tea in the morning");
