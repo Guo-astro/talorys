@@ -14,6 +14,8 @@ export const semanticConfigSchema = z.object({
   vectorFloor: z.object({
     absolute: z.number().min(0).max(1),
     relative: z.number().min(0).max(1),
+    /** Lowest cosine for a top-k fallback hit; never above `absolute`. */
+    backstop: z.number().min(0).max(1),
   }),
 });
 
@@ -23,7 +25,7 @@ export const DEFAULT_SEMANTIC_CONFIG: SemanticConfig = {
   enabled: false,
   model: "@cf/baai/bge-m3",
   maxEmbeddingsPerDay: 500,
-  vectorFloor: { absolute: 0.55, relative: 0.1 },
+  vectorFloor: { absolute: 0.55, relative: 0.1, backstop: 0.4 },
 };
 
 /** The default model before bge-m3. Stored with its untouched 0.5/0.1 floors, it reads as the new defaults. */
@@ -63,7 +65,8 @@ const defined = <T extends object>(obj: T): Partial<T> =>
  * are ignored. A present but invalid value reads as the defaults, keeping `enabled`
  * when it is a boolean. Pass `db` to tell an unparseable stored value from an absent key.
  * A stored untouched legacy default (bge-small with floors 0.5/0.1) reads with the current
- * default model and floors; the stored value itself is never rewritten.
+ * default model and floors; the stored value itself is never rewritten. A stored floor without
+ * `backstop` gets the default one, lowered to `absolute` when that is below it.
  */
 export function readSemanticConfig(settings: SettingsService, db?: Database): SemanticConfig | null {
   const stored = settings.getJson<unknown>(SEMANTIC_CONFIG_KEY);
@@ -86,7 +89,15 @@ export function readSemanticConfig(settings: SettingsService, db?: Database): Se
       ...(floor && typeof floor === "object" && !Array.isArray(floor) ? floor : {}),
     },
   });
-  return parsed.success ? parsed.data : defaults(enabled);
+  if (!parsed.success) return defaults(enabled);
+  // A config stored before the backstop existed may hold an absolute floor under the default backstop.
+  const f = parsed.data.vectorFloor;
+  if (f.backstop > f.absolute) {
+    const storedBackstop = floor && typeof floor === "object" && "backstop" in floor;
+    if (storedBackstop) return defaults(enabled);
+    f.backstop = f.absolute;
+  }
+  return parsed.data;
 }
 
 /** The config a patch would produce, without storing it. Throws ValidationError on invalid values. */
@@ -101,6 +112,10 @@ export function mergeSemanticConfig(current: SemanticConfig | null, patch: Seman
     vectorFloor: { ...base.vectorFloor, ...defined(vectorFloor ?? {}) },
   });
   if (!parsed.success) throw ValidationError.fromZod(parsed.error);
+  const { absolute, backstop } = parsed.data.vectorFloor;
+  if (backstop > absolute) {
+    throw new ValidationError(`vectorFloor.backstop (${backstop}) must not be above vectorFloor.absolute (${absolute})`);
+  }
   return parsed.data;
 }
 

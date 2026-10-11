@@ -69,9 +69,13 @@ export const CASES = [
   { id: "L-mountain", gate: false, query: "Plan me a Saturday adventure in the mountains",
     memories: [{ content: "I'm afraid of heights" }, { content: "My knee surgery was in August" }, { content: "My boss is coming over Saturday", category: "person" }] },
   { id: "L-arm", gate: false, memories: [{ content: "I only have one arm" }], query: "Can I play tennis like a regular person?" },
+  { id: "L-noarm", gate: false, memories: [{ content: "I have no arms" }], query: "Can I play tennis like a regular person?" },
 ];
 
-/** Scores one answer; returns the list of reasons it fails (empty means pass). L-mountain and L-arm report only. */
+/** True when an L-noarm answer takes the no-arms memory into account. */
+export const usesNoArms = (answer) => /\bno arms\b|\barmless\b|\bwithout (?:any )?arms\b|\barms\b/i.test(answer);
+
+/** Scores one answer; returns the list of reasons it fails (empty means pass). L-mountain, L-arm and L-noarm report only. */
 export function score(caseId, text) {
   const t = fold(text);
   const plain = t.replace(/\*/g, "");
@@ -209,6 +213,11 @@ function selfTest() {
     console.log(`${ok ? "ok  " : "FAIL"} ${id} ${want ? "accepts" : "rejects"}: ${answer}`);
     if (!ok) failed++;
   }
+  for (const [answer, want] of [["Without arms you can still play adapted tennis.", true], ["Sure, grab a racket!", false]]) {
+    const ok = usesNoArms(answer) === want;
+    console.log(`${ok ? "ok  " : "FAIL"} L-noarm used ${want ? "detects" : "ignores"}: ${answer}`);
+    if (!ok) failed++;
+  }
   return failed ? 1 : 0;
 }
 
@@ -247,6 +256,7 @@ async function main() {
       r.latency_ms = Date.now() - started;
       r.problems = score(kase.id, r.answer);
       if (kase.id === "L-mountain") r.used = { heights: /height/i.test(r.answer), knee: /knee/i.test(r.answer) };
+      if (kase.id === "L-noarm") r.used = { no_arms: usesNoArms(r.answer) };
       if (kase.id === "L-arm") r.used = { one_arm: /\bone arm|one-arm|single arm|one-handed|\barm\b/i.test(r.answer) };
       r.status = r.problems.length ? "fail" : "pass";
     } catch (error) {

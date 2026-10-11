@@ -33,6 +33,7 @@ Defaults come from `DEFAULT_SEMANTIC_CONFIG` in
 | `maxEmbeddingsPerDay` | `500` | Daily embedding cap (0 to 10,000) |
 | `vectorFloor.absolute` | `0.55` | Minimum cosine score for a vector hit |
 | `vectorFloor.relative` | `0.1` | A vector hit must also be within this of the best hit |
+| `vectorFloor.backstop` | `0.4` | Minimum cosine for a top-k fallback hit; never above `vectorFloor.absolute` |
 
 Turning it off keeps the vectors, so turning it back on only embeds what
 changed in the meantime.
@@ -62,8 +63,14 @@ On each chat turn and scheduled prompt, the module replaces upstream
    deleted memories are purged.
 2. **Two rankings.** A cosine scan over `tal_semantic_vectors`, keeping hits
    that clear both parts of `vectorFloor`, and the upstream keyword search.
-3. **Fusion.** The two lists are merged with reciprocal rank fusion (k = 60).
-4. **Selection.** The top 8 go into the prompt, padded with recent preferences
+3. **Top-k fallback.** When fewer than 4 vector hits clear the floors, the list
+   is filled up to 4 with the best remaining vectors at or above
+   `vectorFloor.backstop`, best first, so loose associations that score under
+   the floor still reach the model. "What's the capital of France?" (best
+   bge-m3 cosine 0.384) still gets no vector hits; a greeting such as "hello"
+   (best about 0.51) brings up to 4 low-relevance memories.
+4. **Fusion.** The two lists are merged with reciprocal rank fusion (k = 60).
+5. **Selection.** The top 8 go into the prompt, padded with recent preferences
    by the upstream rule (up to 4, never past 8 in total).
 
 Memories reach the prompt in the upstream format (`- [category] content`). No
@@ -151,17 +158,22 @@ into its own. To remove them once, recommended after switching:
 
 ## Known limitation
 
-The embedding model matches meaning, not loose associations. With "I'm afraid
-of heights" and "My knee surgery was in August" saved, "Plan me a Saturday
-adventure in the mountains" can score both below the floor, so neither is
-recalled. The live eval reports this case but never fails on it. Lowering
-`vectorFloor` trades this for more noise in other answers.
+The embedding model matches meaning, not loose associations, so these memories
+score under the 0.55 floor and reach the model only through the top-k fallback.
+For "Plan me a Saturday adventure in the mountains", "I'm afraid of heights"
+(0.512) is recalled in a small store, while "My knee surgery was in August"
+(0.409) gets in only when few memories compete: in a 21-memory pool the 4
+fallback slots go to better-scoring memories. For "Can I play tennis like a
+regular person?", "I only have one arm" (0.427) and "I have no arms" (0.435)
+get in on the backstop. The live eval reports these cases but never fails on
+them. Lowering `vectorFloor` or the backstop trades misses for more noise in
+other answers.
 
 The car and oil cases count the VW as current only when the answer says he
 drives, owns or has it, and the oil case also fails when the answer gives the
 VW its own oil advice or says it lacks info about his car; a separate L-arm
 case reports, without failing, whether a tennis answer remembers that he has
-one arm.
+one arm, and L-noarm does the same for a saved "I have no arms".
 
 For local development and tests, see the mock embedder in
 [development.md](development.md#semantic-recall).

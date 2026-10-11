@@ -90,25 +90,46 @@ async function embedQuery(ctx: SemanticContext, query: string): Promise<Float32A
 }
 
 /**
+ * Vector hits the floors keep are topped up to this many with the best remaining vectors at or
+ * above `vectorFloor.backstop`. Measured on bge-m3 (2026-10-10): the tennis question scores
+ * "I only have one arm" 0.427 and "I have no arms" 0.435; the mountain question "I'm afraid of
+ * heights" 0.512 and "My knee surgery was in August" 0.409; all under the 0.55 floor. "what's the
+ * capital of France?" tops out at 0.384, so it stays empty. Greetings such as "hello" top about
+ * 0.51 and so bring up to 4 low-relevance memories.
+ */
+export const FALLBACK_K = 4;
+
+/**
  * Brute-force cosine over every stored vector of `model` with the query's dims, keeping hits
- * at or above the absolute floor and within `relative` of the best hit, best first. Rows of
+ * at or above the absolute floor and within `relative` of the best hit, best first. Fewer than
+ * FALLBACK_K such hits are filled up to it with the best remaining vectors at or above the
+ * backstop (ties to the newer update, then the lower id), each keeping its real cosine. Rows of
  * another model or size are never scored.
  */
 function scanVectors(ctx: SemanticContext, model: string, query: Float32Array): { id: string; cosine: number }[] {
-  const { absolute, relative } = ctx.config.vectorFloor;
-  const scored: { id: string; cosine: number }[] = [];
-  for (const row of ctx.db.all<{ memory_id: string; vector: string }>(
-    `SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ? AND dims = ?`,
+  const { absolute, relative, backstop } = ctx.config.vectorFloor;
+  const all: { id: string; cosine: number; updated: string | null }[] = [];
+  for (const row of ctx.db.all<{ memory_id: string; vector: string; updated_at: string | null }>(
+    `SELECT v.memory_id, v.vector, m.updated_at FROM tal_semantic_vectors v LEFT JOIN tal_memories m ON m.id = v.memory_id
+     WHERE v.model = ? AND v.dims = ?`,
     model,
     query.length,
   )) {
-    const c = cosine(query, decodeVector(row.vector));
-    if (c >= absolute) scored.push({ id: row.memory_id, cosine: c });
+    all.push({ id: row.memory_id, cosine: cosine(query, decodeVector(row.vector)), updated: row.updated_at });
   }
-  if (scored.length === 0) return [];
-  scored.sort((a, b) => b.cosine - a.cosine);
-  const cutoff = scored[0]!.cosine - relative;
-  return scored.filter((s) => s.cosine >= cutoff).slice(0, CANDIDATES_PER_LIST);
+  all.sort((a, b) => b.cosine - a.cosine || compareDesc(a.updated ?? "", b.updated ?? "") || compareAsc(a.id, b.id));
+  const top = all[0];
+  const kept =
+    top && top.cosine >= absolute ? all.filter((s) => s.cosine >= absolute && s.cosine >= top.cosine - relative) : [];
+  if (kept.length < FALLBACK_K) {
+    const taken = new Set(kept.map((s) => s.id));
+    // A row whose memory is gone (pending purge) never takes a fallback slot.
+    for (const s of all) {
+      if (kept.length >= FALLBACK_K || s.cosine < backstop) break;
+      if (!taken.has(s.id) && s.updated !== null) kept.push(s);
+    }
+  }
+  return kept.slice(0, CANDIDATES_PER_LIST).map(({ id, cosine }) => ({ id, cosine }));
 }
 
 /**

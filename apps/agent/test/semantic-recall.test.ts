@@ -19,6 +19,7 @@ import {
   MAX_NEWER_PER_HIT,
   MAX_RELEVANT_MEMORIES,
   NEWER_DUPLICATE_COSINE,
+  FALLBACK_K,
   NEWER_WINS_NOTE,
   newerDuplicateCosine,
   type SemanticContext,
@@ -34,8 +35,13 @@ import { semanticTools } from "../src/semantic/tools";
 import type { ToolContext } from "../src/tools";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
 
-/** Clears memories and semantic state and returns an enabled context with a spied mock embedder. */
-function context(a: TalorysAgent, patch: Partial<SemanticConfig> = {}, embedder: Embedder | null = new MockEmbedder()) {
+type ContextPatch = Partial<Omit<SemanticConfig, "vectorFloor">> & { vectorFloor?: Partial<SemanticConfig["vectorFloor"]> };
+
+/**
+ * Clears memories and semantic state and returns an enabled context with a spied mock embedder.
+ * A patched floor without `backstop` sets it to `absolute`, so cases about other behavior get no top-k fallback.
+ */
+function context(a: TalorysAgent, patch: ContextPatch = {}, embedder: Embedder | null = new MockEmbedder()) {
   const s = a.services;
   dropSemanticData(s.db);
   deleteSemanticConfig(s.settings);
@@ -46,7 +52,15 @@ function context(a: TalorysAgent, patch: Partial<SemanticConfig> = {}, embedder:
     db: s.db,
     services: s,
     embedder,
-    config: { ...DEFAULT_SEMANTIC_CONFIG, enabled: true, maxEmbeddingsPerDay: 10_000, ...patch },
+    config: {
+      ...DEFAULT_SEMANTIC_CONFIG,
+      enabled: true,
+      maxEmbeddingsPerDay: 10_000,
+      ...patch,
+      vectorFloor: patch.vectorFloor
+        ? { ...DEFAULT_SEMANTIC_CONFIG.vectorFloor, backstop: patch.vectorFloor.absolute ?? DEFAULT_SEMANTIC_CONFIG.vectorFloor.absolute, ...patch.vectorFloor }
+        : { ...DEFAULT_SEMANTIC_CONFIG.vectorFloor },
+    },
   };
   return { ctx, embed, s };
 }
@@ -208,7 +222,7 @@ describe("hybridSearch", () => {
       await runIndexer(ctx);
       expect(await hybridSearch(ctx, "my vehicle", { limit: 10 })).toEqual([]);
 
-      ctx.config = { ...ctx.config, vectorFloor: { absolute: 0, relative: 0 } };
+      ctx.config = { ...ctx.config, vectorFloor: { absolute: 0, relative: 0, backstop: 0 } };
       const hits = await hybridSearch(ctx, "my vehicle", { limit: 10 });
       // Only the best cosine survives a zero relative window.
       expect(hits).toHaveLength(1);
@@ -442,6 +456,97 @@ describe("newer near-duplicate pull-in", () => {
     });
   });
 
+});
+
+describe("top-k vector fallback", () => {
+  const M3 = "@cf/baai/bge-m3";
+  const TENNIS = "Can I play tennis like a regular person?";
+  const toolCtx = (a: TalorysAgent): ToolContext => ({ services: a.services, timezone: "UTC", mode: "chat", ownerMessage: "" });
+  const vectorIds = (hits: { memory: Memory; cosine: number | null }[]) => hits.filter((h) => h.cosine !== null).map((h) => h.memory.id);
+
+  it("defaults to a 0.40 backstop and fills to four", () => {
+    expect(FALLBACK_K).toBe(4);
+    expect(DEFAULT_SEMANTIC_CONFIG.vectorFloor.backstop).toBe(0.4);
+  });
+
+  it("recalls a lone memory under the floor but above the backstop, on the prompt path and in search_memories", async () => {
+    await inAgent(async (a) => {
+      const { ctx } = context(a, { model: M3 }, stubEmbedder(M3, near(1, 1, 1024)));
+      const arm = await place(a, M3, "I only have one arm", "2026-10-01T12:00:00Z", near(0.427, 2, 1024));
+      const hits = await hybridSearch(ctx, TENNIS, { limit: 8 });
+      expect(hits.map((h) => h.memory.id)).toEqual([arm.id]);
+      expect(hits[0]!.cosine).toBeCloseTo(0.427, 3);
+      expect((await selectSemanticMemories(ctx, TENNIS)).map((m) => m.id)).toEqual([arm.id]);
+      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")!;
+      const result = (await tool.execute({ query: TENNIS }, toolCtx(a))) as { memories: { id: string }[] };
+      expect(result.memories.map((m) => m.id)).toEqual([arm.id]);
+    });
+  });
+
+  it("leaves a memory under the backstop out", async () => {
+    await inAgent(async (a) => {
+      const { ctx } = context(a, { model: M3 }, stubEmbedder(M3, near(1, 1, 1024)));
+      await place(a, M3, "Paris trip notes", "2026-10-01T12:00:00Z", near(0.384, 2, 1024));
+      const query = "what's the capital of France?";
+      expect(await hybridSearch(ctx, query, { limit: 8 })).toEqual([]);
+      expect(await selectSemanticMemories(ctx, query)).toEqual([]);
+      const tool = semanticTools(ctx).find((x) => x.name === "search_memories")!;
+      const result = (await tool.execute({ query }, toolCtx(a))) as { memories: { id: string }[] };
+      expect(result.memories).toEqual([]);
+    });
+  });
+
+  it("fills the mountain question to four vector hits best first, so heights is in and knee is not", async () => {
+    await inAgent(async (a) => {
+      const { ctx } = context(a, { model: M3 }, stubEmbedder(M3, near(1, 1, 1024)));
+      const iso = "2026-10-01T12:00:00Z";
+      const boss = await place(a, M3, "My boss is coming over Saturday", iso, near(0.66, 2, 1024));
+      const heights = await place(a, M3, "I'm afraid of heights", iso, near(0.512, 3, 1024));
+      const knee = await place(a, M3, "My knee surgery was in August", iso, near(0.409, 4, 1024));
+      const d1 = await place(a, M3, "I collect vinyl records", iso, near(0.53, 5, 1024));
+      const d2 = await place(a, M3, "My sister lives in Ohio", iso, near(0.52, 6, 1024));
+      const hits = await hybridSearch(ctx, "zzz", { limit: 8 });
+      expect(vectorIds(hits)).toEqual([boss.id, d1.id, d2.id, heights.id]);
+      expect(hits.map((h) => h.memory.id)).not.toContain(knee.id);
+    });
+  });
+
+  it("adds no fallback when four or more hits clear the floors", async () => {
+    await inAgent(async (a) => {
+      const { ctx } = context(a, { model: M3 }, stubEmbedder(M3, near(1, 1, 1024)));
+      const iso = "2026-10-01T12:00:00Z";
+      const floor = [];
+      for (const [i, c] of [0.9, 0.88, 0.86, 0.85].entries()) floor.push(await place(a, M3, `Floor fact ${i}`, iso, near(c, i + 2, 1024)));
+      const below = await place(a, M3, "Below the floor", iso, near(0.5, 9, 1024));
+      const hits = await hybridSearch(ctx, "zzz", { limit: 8 });
+      expect(vectorIds(hits)).toEqual(floor.map((m) => m.id));
+      expect(hits.map((h) => h.memory.id)).not.toContain(below.id);
+    });
+  });
+
+  it("breaks cosine ties by the newer update, then the lower id", async () => {
+    await inAgent(async (a) => {
+      const { ctx } = context(a, { model: M3 }, stubEmbedder(M3, near(1, 1, 1024)));
+      const older = await place(a, M3, "Older tie", "2026-01-01T00:00:00Z", near(0.45, 2, 1024));
+      const newer = await place(a, M3, "Newer tie", "2026-06-01T00:00:00Z", near(0.45, 3, 1024));
+      expect(vectorIds(await hybridSearch(ctx, "zzz", { limit: 8 }))).toEqual([newer.id, older.id]);
+    });
+  });
+
+  it("never lets the prompt list exceed eight memories", async () => {
+    await inAgent(async (a) => {
+      const { ctx, s } = context(a, { model: M3 }, stubEmbedder(M3, near(1, 1, 1024)));
+      const iso = "2026-10-01T12:00:00Z";
+      for (let i = 0; i < 2; i++) await place(a, M3, `Floor fact ${i}`, iso, near(0.6 + i * 0.01, i + 2, 1024));
+      for (let i = 0; i < 6; i++) await place(a, M3, `Fallback fact ${i}`, iso, near(0.45 + i * 0.01, i + 4, 1024));
+      for (let i = 0; i < 6; i++) s.memories.create({ content: `Preference ${i}`, category: "preference" });
+      const query = near(1, 1, 1024);
+      ctx.embedder = { model: M3, dims: 1024, embed: async (texts) => texts.map((t) => (t === "zzz" ? query : near(0, 20, 1024))) };
+      const selected = (await selectSemanticMemories(ctx, "zzz")).filter((m) => m.content !== NEWER_WINS_NOTE);
+      expect(selected.filter((m) => m.content.includes("fact"))).toHaveLength(FALLBACK_K);
+      expect(selected).toHaveLength(MAX_RELEVANT_MEMORIES);
+    });
+  });
 });
 
 describe("selectSemanticMemories", () => {

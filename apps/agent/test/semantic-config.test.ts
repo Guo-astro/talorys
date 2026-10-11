@@ -10,6 +10,7 @@ import {
   writeSemanticConfig,
 } from "../src/semantic/config";
 import { dropSemanticData } from "../src/semantic/migrations";
+import { ValidationError } from "../src/api/errors";
 import type { Services } from "../src/services/container";
 
 function reset(s: Services) {
@@ -57,14 +58,14 @@ describe("semantic config", () => {
         enabled: true,
         model: "@cf/baai/bge-small-en-v1.5",
         maxEmbeddingsPerDay: 300,
-        vectorFloor: { absolute: 0.6, relative: 0.2 },
+        vectorFloor: { absolute: 0.6, relative: 0.2, backstop: 0.4 },
       });
     });
   });
 
   it("defaults to bge-m3 and reads an untouched legacy bge-small default as the new defaults", async () => {
     expect(DEFAULT_SEMANTIC_CONFIG.model).toBe("@cf/baai/bge-m3");
-    expect(DEFAULT_SEMANTIC_CONFIG.vectorFloor).toEqual({ absolute: 0.55, relative: 0.1 });
+    expect(DEFAULT_SEMANTIC_CONFIG.vectorFloor).toEqual({ absolute: 0.55, relative: 0.1, backstop: 0.4 });
     await inAgent((agent) => {
       const s = agent.services;
       reset(s);
@@ -78,7 +79,7 @@ describe("semantic config", () => {
 
       const tuned = { ...legacy, vectorFloor: { absolute: 0.6, relative: 0.1 } };
       s.settings.setJson(SEMANTIC_CONFIG_KEY, tuned);
-      expect(readSemanticConfig(s.settings, s.db)).toEqual(tuned);
+      expect(readSemanticConfig(s.settings, s.db)).toEqual({ ...tuned, vectorFloor: { ...tuned.vectorFloor, backstop: 0.4 } });
       reset(s);
     });
   });
@@ -91,8 +92,37 @@ describe("semantic config", () => {
       expect(readSemanticConfig(s.settings, s.db)).toEqual({
         ...DEFAULT_SEMANTIC_CONFIG,
         enabled: true,
-        vectorFloor: { absolute: 0.7, relative: DEFAULT_SEMANTIC_CONFIG.vectorFloor.relative },
+        vectorFloor: { ...DEFAULT_SEMANTIC_CONFIG.vectorFloor, absolute: 0.7 },
       });
+    });
+  });
+
+  it("vectorFloor.backstop defaults to 0.4, reads tolerantly, patches, and never exceeds absolute", async () => {
+    await inAgent((agent) => {
+      const s = agent.services;
+      reset(s);
+      expect(DEFAULT_SEMANTIC_CONFIG.vectorFloor.backstop).toBe(0.4);
+
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, { enabled: true, model: "@cf/baai/bge-m3", vectorFloor: { absolute: 0.6, relative: 0.1 } });
+      expect(readSemanticConfig(s.settings, s.db)!.vectorFloor).toEqual({ absolute: 0.6, relative: 0.1, backstop: 0.4 });
+
+      const legacy = { enabled: true, model: LEGACY_DEFAULT_MODEL, maxEmbeddingsPerDay: 300, vectorFloor: { absolute: 0.5, relative: 0.1 } };
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, legacy);
+      expect(readSemanticConfig(s.settings, s.db)!.vectorFloor).toEqual(DEFAULT_SEMANTIC_CONFIG.vectorFloor);
+
+      // A pre-backstop store with an absolute floor under 0.4 lowers the backstop to it.
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, { enabled: true, vectorFloor: { absolute: 0.3, relative: 0.1 } });
+      expect(readSemanticConfig(s.settings, s.db)!.vectorFloor).toEqual({ absolute: 0.3, relative: 0.1, backstop: 0.3 });
+
+      reset(s);
+      const next = writeSemanticConfig(s.settings, { vectorFloor: { backstop: 0.35 } }, s.db);
+      expect(next.vectorFloor).toEqual({ ...DEFAULT_SEMANTIC_CONFIG.vectorFloor, backstop: 0.35 });
+      expect(readSemanticConfig(s.settings, s.db)!.vectorFloor.backstop).toBe(0.35);
+
+      expect(() => writeSemanticConfig(s.settings, { vectorFloor: { backstop: 0.6 } }, s.db)).toThrow(ValidationError);
+      expect(() => writeSemanticConfig(s.settings, { vectorFloor: { absolute: 0.3 } }, s.db)).toThrow(ValidationError);
+      expect(readSemanticConfig(s.settings, s.db)!.vectorFloor.backstop).toBe(0.35);
+      reset(s);
     });
   });
 
@@ -134,7 +164,7 @@ describe("semantic config", () => {
       const next = writeSemanticConfig(s.settings, { vectorFloor: { relative: 0.3 } }, s.db);
       expect(next).toEqual({
         ...DEFAULT_SEMANTIC_CONFIG,
-        vectorFloor: { absolute: DEFAULT_SEMANTIC_CONFIG.vectorFloor.absolute, relative: 0.3 },
+        vectorFloor: { ...DEFAULT_SEMANTIC_CONFIG.vectorFloor, relative: 0.3 },
       });
       expect(storedKeys(s)).toEqual(["enabled", "maxEmbeddingsPerDay", "model", "vectorFloor"]);
       reset(s);
@@ -162,7 +192,7 @@ describe("semantic config", () => {
       ever_enabled: true,
     });
 
-    for (const bad of [{ enabled: "yes" }, { vectorFloor: { absolute: 2 } }, { model: "" }, { maxEmbeddingsPerDay: 1.5 }]) {
+    for (const bad of [{ enabled: "yes" }, { vectorFloor: { absolute: 2 } }, { vectorFloor: { backstop: 0.9 } }, { model: "" }, { maxEmbeddingsPerDay: 1.5 }]) {
       const r = await c.call("/api/semantic/config", { method: "PUT", body: bad });
       expect(r.status).toBe(400);
     }
