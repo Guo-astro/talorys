@@ -36,8 +36,9 @@ export class ToolError extends Error {
   }
 }
 
-const CONFIRMATION_PATTERN =
-  /\b(yes|yep|yeah|confirm(ed)?|go ahead|do it|sure|ok(ay)?|delete|remove|forget|cancel|erase|clear|proceed)\b/i;
+// Only affirmative replies count. Action verbs ("delete", "remove", ...) are excluded so the
+// original request can't double as its own confirmation.
+const CONFIRMATION_PATTERN = /\b(yes|yep|yeah|confirm(ed)?|go ahead|do it|sure|ok(ay)?|proceed)\b/i;
 
 export interface ExecutorLimits {
   maxToolCalls: number;

@@ -107,6 +107,14 @@ describe("prompt-injection and destructive-action defenses", () => {
       const confirmed = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "yes, delete it" }, { maxToolCalls: 5 });
       await expect(confirmed.execute("delete_task", { task: task.id })).rejects.toThrow(/destructive/); // still needs confirmed flag
       await confirmed.execute("delete_task", { task: task.id, confirmed: true });
+
+      // The request itself ("delete ...") is not a confirmation.
+      const task2 = agent.services.tasks.create({ title: "Also keep me" });
+      const request = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "delete the task Also keep me" }, { maxToolCalls: 5 });
+      await expect(request.execute("delete_task", { task: task2.id, confirmed: true })).rejects.toThrow(/destructive/);
+
+      // Cancelling an unknown automation reports an error instead of succeeding.
+      await expect(confirmed.execute("cancel_automation", { id: "missing", confirmed: true })).rejects.toThrow(/not found/);
       expect(agent.services.tasks.get(task.id)).toBeNull();
     });
   });

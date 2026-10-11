@@ -84,8 +84,10 @@ export const reminderTools = [
     input: z.object({ id: z.string().min(1), confirmed: z.boolean().optional() }),
     label: () => `Cancelling a schedule`,
     execute: async (i, ctx) => {
-      await ctx.services.automations.delete(i.id);
-      return { cancelled: i.id };
+      const a = ctx.services.automations.get(i.id);
+      if (!a) throw new ToolError("Automation not found.");
+      await ctx.services.automations.delete(a.id);
+      return { cancelled: a.name };
     },
   }),
   defineTool({

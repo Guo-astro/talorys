@@ -37,6 +37,10 @@ export class AutomationService {
     return this.repo.list();
   }
 
+  get(id: string): Automation | null {
+    return this.repo.get(id);
+  }
+
   async create(input: { name: string; kind: AutomationKind; message: string; schedule: ScheduleSpec; enabled: boolean }): Promise<Automation> {
     const schedule = scheduleSpecSchema.parse(input.schedule);
     if ((input.kind === "reminder" || input.kind === "agent_prompt") && !input.message.trim()) {

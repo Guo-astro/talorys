@@ -52,7 +52,8 @@ export const noteTools = [
   }),
   defineTool({
     name: "update_note",
-    description: "Replace a note's title and/or content, or append text to it.",
+    description:
+      "Replace a note's title and/or content, or append text to it. If both content and append are given, content replaces the note first and append is added after it.",
     permission: "write",
     maxCallsPerTurn: 3,
     input: z.object({
