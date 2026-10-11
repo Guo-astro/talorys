@@ -3,6 +3,7 @@ import { inAgent, loggedIn } from "./helpers";
 import { invalidateSemanticCache } from "../src/semantic";
 import {
   DEFAULT_SEMANTIC_CONFIG,
+  LEGACY_DEFAULT_MODEL,
   SEMANTIC_CONFIG_KEY,
   deleteSemanticConfig,
   readSemanticConfig,
@@ -61,6 +62,27 @@ describe("semantic config", () => {
     });
   });
 
+  it("defaults to bge-m3 and reads an untouched legacy bge-small default as the new defaults", async () => {
+    expect(DEFAULT_SEMANTIC_CONFIG.model).toBe("@cf/baai/bge-m3");
+    expect(DEFAULT_SEMANTIC_CONFIG.vectorFloor).toEqual({ absolute: 0.55, relative: 0.1 });
+    await inAgent((agent) => {
+      const s = agent.services;
+      reset(s);
+      const legacy = { enabled: true, model: LEGACY_DEFAULT_MODEL, maxEmbeddingsPerDay: 300, vectorFloor: { absolute: 0.5, relative: 0.1 } };
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, legacy);
+      expect(readSemanticConfig(s.settings, s.db)).toEqual({ ...DEFAULT_SEMANTIC_CONFIG, enabled: true, maxEmbeddingsPerDay: 300 });
+      expect(s.settings.getJson(SEMANTIC_CONFIG_KEY)).toEqual(legacy);
+
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, { enabled: true, model: LEGACY_DEFAULT_MODEL });
+      expect(readSemanticConfig(s.settings, s.db)).toEqual({ ...DEFAULT_SEMANTIC_CONFIG, enabled: true });
+
+      const tuned = { ...legacy, vectorFloor: { absolute: 0.6, relative: 0.1 } };
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, tuned);
+      expect(readSemanticConfig(s.settings, s.db)).toEqual(tuned);
+      reset(s);
+    });
+  });
+
   it("fills missing fields from the defaults", async () => {
     await inAgent((agent) => {
       const s = agent.services;
@@ -110,7 +132,10 @@ describe("semantic config", () => {
       expect(s.settings.getJson(SEMANTIC_CONFIG_KEY)).toBeNull();
       s.settings.setJson(SEMANTIC_CONFIG_KEY, { enabled: false, pastWeight: 0.5, maxPastInContext: 3 });
       const next = writeSemanticConfig(s.settings, { vectorFloor: { relative: 0.3 } }, s.db);
-      expect(next).toEqual({ ...DEFAULT_SEMANTIC_CONFIG, vectorFloor: { absolute: 0.5, relative: 0.3 } });
+      expect(next).toEqual({
+        ...DEFAULT_SEMANTIC_CONFIG,
+        vectorFloor: { absolute: DEFAULT_SEMANTIC_CONFIG.vectorFloor.absolute, relative: 0.3 },
+      });
       expect(storedKeys(s)).toEqual(["enabled", "maxEmbeddingsPerDay", "model", "vectorFloor"]);
       reset(s);
     });

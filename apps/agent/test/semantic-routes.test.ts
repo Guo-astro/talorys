@@ -78,6 +78,25 @@ describe("semantic routes", () => {
     await inAgent((agent) => reset(agent.services));
   });
 
+  it("status counts only vectors of the current model", async () => {
+    await inAgent((agent) => reset(agent.services));
+    const c = await loggedIn();
+    await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true } });
+    const count = await inAgent(async (agent) => {
+      const s = agent.services;
+      const config = readSemanticConfig(s.settings, s.db)!;
+      await runIndexer({ db: s.db, embedder: new MockEmbedder(), config: { ...config, maxEmbeddingsPerDay: 10_000 } }, { maxEmbed: 10_000 });
+      const extra = s.memories.create({ content: "Stored under an older model", category: "fact" });
+      s.db.run(
+        `INSERT INTO tal_semantic_vectors (memory_id, model, dims, content_hash, vector, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        extra.id, "@cf/baai/bge-small-en-v1.5", 384, "stale", "", new Date().toISOString(),
+      );
+      return s.memories.count();
+    });
+    expect(await c.json("/api/semantic/status")).toMatchObject({ embedder: "mock", vectors: count - 1, pending: 1 });
+    await inAgent((agent) => reset(agent.services));
+  });
+
   it("Delete semantic data requires confirm DELETE", async () => {
     await inAgent((agent) => reset(agent.services));
     const c = await loggedIn();

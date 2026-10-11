@@ -2,7 +2,7 @@ import type { Memory } from "@talorys/shared";
 import { describe, expect, it, vi } from "vitest";
 import { inAgent } from "./helpers";
 import { invalidateSemanticCache } from "../src/semantic";
-import { DEFAULT_SEMANTIC_CONFIG, type SemanticConfig, deleteSemanticConfig } from "../src/semantic/config";
+import { DEFAULT_SEMANTIC_CONFIG, LEGACY_DEFAULT_MODEL, type SemanticConfig, deleteSemanticConfig } from "../src/semantic/config";
 import {
   EMBEDDING_DIMS,
   type Embedder,
@@ -20,9 +20,11 @@ import {
   MAX_RELEVANT_MEMORIES,
   NEWER_DUPLICATE_COSINE,
   NEWER_WINS_NOTE,
+  newerDuplicateCosine,
   type SemanticContext,
   applyM1,
   hybridSearch,
+  pullInNewer,
   rrf,
   savedAt,
   selectSemanticMemories,
@@ -57,18 +59,18 @@ const setUpdated = (a: TalorysAgent, id: string, iso: string) =>
   a.services.db.run(`UPDATE tal_memories SET updated_at = ?, created_at = ? WHERE id = ?`, iso, iso, id);
 
 /** Pads a short coordinate list to a full embedding. */
-function vec(coords: number[]): Float32Array {
-  const v = new Float32Array(EMBEDDING_DIMS);
+function vec(coords: number[], dims = EMBEDDING_DIMS): Float32Array {
+  const v = new Float32Array(dims);
   v.set(coords);
   return v;
 }
 
 /** Unit vector at `cos` to the first axis, off along axis `k`: two such vectors meet at cos1 * cos2. */
-const near = (cos: number, k: number) => {
+const near = (cos: number, k: number, dims = EMBEDDING_DIMS) => {
   const coords = new Array<number>(k + 1).fill(0);
   coords[0] = cos;
   coords[k] = Math.sqrt(1 - cos * cos);
-  return vec(coords);
+  return vec(coords, dims);
 };
 
 /** Unit vectors whose pairwise cosines are `gram` (Cholesky of the Gram matrix). */
@@ -82,12 +84,12 @@ function fromGram(gram: number[][]): Float32Array[] {
       l[i]![j] = i === j ? Math.sqrt(sum) : sum / l[j]![j]!;
     }
   }
-  return l.map(vec);
+  return l.map((row) => vec(row));
 }
 
 /** Returns `query` for every text; spied so a test can count calls. */
 function stubEmbedder(model: string, query: Float32Array): Embedder {
-  return { model, dims: EMBEDDING_DIMS, embed: async (texts) => texts.map(() => query) };
+  return { model, dims: query.length, embed: async (texts) => texts.map(() => query) };
 }
 
 /** Creates a memory saved at `iso` with a current stored vector, so the indexer leaves it alone. */
@@ -98,7 +100,7 @@ async function place(a: TalorysAgent, model: string, content: string, iso: strin
   ensureSemanticSchema(s.db);
   s.db.run(
     `INSERT INTO tal_semantic_vectors (memory_id, model, dims, content_hash, vector, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-    m.id, model, EMBEDDING_DIMS, await contentHash(embeddingText(m)), encodeVector(vector), iso,
+    m.id, model, vector.length, await contentHash(embeddingText(m)), encodeVector(vector), iso,
   );
   return s.memories.get(m.id)!;
 }
@@ -284,7 +286,9 @@ describe("hybridSearch", () => {
 });
 
 describe("newer near-duplicate pull-in", () => {
-  const MODEL = DEFAULT_SEMANTIC_CONFIG.model;
+  // These measurements were taken on bge-small, so the cases run as that model with its 0.50 floor.
+  const MODEL = LEGACY_DEFAULT_MODEL;
+  const M3 = "@cf/baai/bge-m3";
   const OIL = "How often should I change the oil in my car?";
   // Andy's measured cosines: query~Bug 0.515, query~Porsche 0.519, query~Tesla 0.488 (under the
   // 0.50 floor); Bug~Tesla 0.772 (pulls), Bug~Porsche 0.523 and Tesla~Porsche 0.589 (do not).
@@ -297,7 +301,7 @@ describe("newer near-duplicate pull-in", () => {
 
   it("pulls the newer Tesla in beside the Bug for the oil question, on the prompt path and in search_memories", async () => {
     await inAgent(async (a) => {
-      const { ctx, s } = context(a, {}, stubEmbedder(MODEL, query!));
+      const { ctx, s } = context(a, { model: MODEL, vectorFloor: { absolute: 0.5, relative: 0.1 } }, stubEmbedder(MODEL, query!));
       const b = await place(a, MODEL, "My car is a Volkswagen bug from the 1960s.", "2026-10-11T03:30:17Z", bug!);
       const t = await place(a, MODEL, "I just traded my VW bug away and got a 2025 Tesla.", "2026-10-11T03:31:34Z", tesla!);
       const p = await place(a, MODEL, "I would like to buy a Porsche one day.", "2026-10-11T03:31:42Z", porsche!);
@@ -326,19 +330,19 @@ describe("newer near-duplicate pull-in", () => {
   it("pulls a newer duplicate in, never an older one, and not one under the threshold", async () => {
     const floor = { vectorFloor: { absolute: 0.95, relative: 0.1 } };
     await inAgent(async (a) => {
-      const { ctx } = context(a, floor, stubEmbedder(MODEL, near(1, 1)));
+      const { ctx } = context(a, { model: MODEL, ...floor }, stubEmbedder(MODEL, near(1, 1)));
       const portland = await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(1, 1));
       const denver = await place(a, MODEL, "I live in Denver", "2026-09-14T12:00:00Z", near(0.748, 2));
       expect((await hybridSearch(ctx, "residence", { limit: 8 })).map((h) => h.memory.id)).toEqual([portland.id, denver.id]);
     });
     await inAgent(async (a) => {
-      const { ctx } = context(a, floor, stubEmbedder(MODEL, near(1, 1)));
+      const { ctx } = context(a, { model: MODEL, ...floor }, stubEmbedder(MODEL, near(1, 1)));
       await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(0.748, 2));
       const denver = await place(a, MODEL, "I live in Denver", "2026-09-14T12:00:00Z", near(1, 1));
       expect((await hybridSearch(ctx, "residence", { limit: 8 })).map((h) => h.memory.id)).toEqual([denver.id]);
     });
     await inAgent(async (a) => {
-      const { ctx } = context(a, floor, stubEmbedder(MODEL, near(1, 1)));
+      const { ctx } = context(a, { model: MODEL, ...floor }, stubEmbedder(MODEL, near(1, 1)));
       const older = await place(a, MODEL, "I like jazz", "2026-03-02T12:00:00Z", near(1, 1));
       await place(a, MODEL, "I'm vegetarian", "2026-09-14T12:00:00Z", near(NEWER_DUPLICATE_COSINE - 0.01, 2));
       await place(a, MODEL, "I collect stamps", "2026-03-02T12:00:00Z", near(0.9, 3));
@@ -349,7 +353,7 @@ describe("newer near-duplicate pull-in", () => {
   it("pulls at most two per hit, highest cosine first, without embedding anything", async () => {
     await inAgent(async (a) => {
       const embedder = stubEmbedder(MODEL, near(1, 1));
-      const { ctx, embed } = context(a, { vectorFloor: { absolute: 0.95, relative: 0.1 } }, embedder);
+      const { ctx, embed } = context(a, { model: MODEL, vectorFloor: { absolute: 0.95, relative: 0.1 } }, embedder);
       const base = await place(a, MODEL, "Base fact", "2026-01-01T00:00:00Z", near(1, 1));
       await place(a, MODEL, "Third update", "2026-01-04T00:00:00Z", near(0.75, 2));
       const best = await place(a, MODEL, "First update", "2026-01-02T00:00:00Z", near(0.9, 3));
@@ -360,7 +364,7 @@ describe("newer near-duplicate pull-in", () => {
       expect(embed).toHaveBeenCalledTimes(1);
     });
     await inAgent(async (a) => {
-      const { ctx } = context(a, {}, null);
+      const { ctx } = context(a, { model: MODEL, vectorFloor: { absolute: 0.5, relative: 0.1 } }, null);
       const portland = await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(1, 1));
       const denver = await place(a, MODEL, "I moved to Denver", "2026-09-14T12:00:00Z", near(0.748, 2));
       expect((await hybridSearch(ctx, "Portland", { limit: 8 })).map((h) => h.memory.id)).toEqual([portland.id, denver.id]);
@@ -369,7 +373,7 @@ describe("newer near-duplicate pull-in", () => {
 
   it("drops the weakest regular hit from a full list, and skips the pull when nothing can go", async () => {
     await inAgent(async (a) => {
-      const { ctx } = context(a, { vectorFloor: { absolute: 0.95, relative: 0.1 } }, stubEmbedder(MODEL, near(1, 1)));
+      const { ctx } = context(a, { model: MODEL, vectorFloor: { absolute: 0.95, relative: 0.1 } }, stubEmbedder(MODEL, near(1, 1)));
       const portland = await place(a, MODEL, "I live in Portland", "2026-03-02T12:00:00Z", near(1, 1));
       const denver = await place(a, MODEL, "I live in Denver", "2026-09-14T12:00:00Z", near(0.748, 2));
       const kayak = await place(a, MODEL, "Owns a red kayak", "2026-01-01T12:00:00Z", near(0, 3));
@@ -382,7 +386,7 @@ describe("newer near-duplicate pull-in", () => {
 
   it("never pulls on identical timestamps or from a memory without a stored vector", async () => {
     await inAgent(async (a) => {
-      const { ctx, s } = context(a, { vectorFloor: { absolute: 0.95, relative: 0.1 } }, stubEmbedder(MODEL, near(1, 1)));
+      const { ctx, s } = context(a, { model: MODEL, vectorFloor: { absolute: 0.95, relative: 0.1 } }, stubEmbedder(MODEL, near(1, 1)));
       const one = await place(a, MODEL, "Fact one", "2026-03-02T12:00:00Z", near(1, 1));
       await place(a, MODEL, "Fact two", "2026-03-02T12:00:00Z", near(0.9, 2));
       expect((await hybridSearch(ctx, "zzz", { limit: 8 })).map((h) => h.memory.id)).toEqual([one.id]);
@@ -392,6 +396,52 @@ describe("newer near-duplicate pull-in", () => {
       expect((await hybridSearch(ctx, "Kayak", { limit: 8 })).map((h) => h.memory.id)).toEqual([one.id, pending.id]);
     });
   });
+  it("uses 0.57 for bge-m3 and 0.70 for every other model", async () => {
+    expect(newerDuplicateCosine(M3)).toBe(0.57);
+    expect(newerDuplicateCosine(MODEL)).toBe(NEWER_DUPLICATE_COSINE);
+    expect(newerDuplicateCosine(new MockEmbedder().model)).toBe(0.7);
+    const cases: [string, number, number, boolean][] = [
+      [M3, 1024, 0.58, true],
+      [M3, 1024, 0.55, false],
+      [MODEL, EMBEDDING_DIMS, 0.58, false],
+      [MODEL, EMBEDDING_DIMS, 0.71, true],
+    ];
+    for (const [model, dims, cos, pulls] of cases) {
+      await inAgent(async (a) => {
+        const { ctx } = context(a, { model, vectorFloor: { absolute: 0.95, relative: 0.1 } }, stubEmbedder(model, near(1, 1, dims)));
+        const old = await place(a, model, "Old fact", "2026-03-02T12:00:00Z", near(1, 1, dims));
+        const newer = await place(a, model, "New fact", "2026-09-14T12:00:00Z", near(cos, 2, dims));
+        const ids = (await hybridSearch(ctx, "zzz", { limit: 8 })).map((h) => h.memory.id);
+        expect(ids, `${model} at ${cos}`).toEqual(pulls ? [old.id, newer.id] : [old.id]);
+      });
+    }
+  });
+
+  it("never scores or pulls in rows of another model or size, and re-embeds them for the configured model", async () => {
+    await inAgent(async (a) => {
+      const patch = { model: M3, vectorFloor: { absolute: 0.5, relative: 0.5 } };
+      const { ctx, s } = context(a, patch, stubEmbedder(M3, near(1, 1, 1024)));
+      const current = await place(a, M3, "Current fact", "2026-03-02T12:00:00Z", near(1, 1, 1024));
+      const oldModel = await place(a, MODEL, "Old model fact", "2026-09-14T12:00:00Z", near(1, 1, 1024));
+      const oldSize = await place(a, M3, "Wrong size fact", "2026-09-15T12:00:00Z", near(1, 1, 768));
+      const hits = await hybridSearch(ctx, "zzz", { limit: 8 });
+      expect(hits.map((h) => h.memory.id)).toEqual([current.id]);
+
+      expect(pullInNewer({ ...ctx, embedder: null }, hits, 8).map((h) => h.memory.id)).toEqual([current.id]);
+
+      const report = await runIndexer(ctx);
+      expect(report.embedded).toBe(2);
+      const rows = s.db.all<{ memory_id: string; model: string; dims: number }>(
+        `SELECT memory_id, model, dims FROM tal_semantic_vectors ORDER BY memory_id`,
+      );
+      expect(rows).toEqual(
+        [current.id, oldModel.id, oldSize.id].sort().map((memory_id) => ({ memory_id, model: M3, dims: 1024 })),
+      );
+      const after = (await hybridSearch(ctx, "zzz", { limit: 8 })).map((h) => h.memory.id);
+      expect(after).toEqual(expect.arrayContaining([current.id, oldModel.id, oldSize.id]));
+    });
+  });
+
 });
 
 describe("selectSemanticMemories", () => {

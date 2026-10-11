@@ -116,13 +116,16 @@ semanticRoutes.get("/semantic/status", async (c) => {
   const model = config?.model ?? DEFAULT_SEMANTIC_CONFIG.model;
   const embedder = createEmbedder(c.env.env, s.settings, model);
   const schema = config === null ? null : semanticSchema(s.db);
+  const current = embedder?.model ?? model;
   return c.json({
     enabled,
     ever_enabled: config !== null,
     schema,
     embedder: embedder instanceof MockEmbedder ? "mock" : embedder ? "workers-ai" : "none",
-    vectors: schema ? (s.db.one<{ n: number }>(`SELECT count(*) AS n FROM tal_semantic_vectors`)?.n ?? 0) : 0,
-    pending: !enabled ? 0 : schema ? (await pendingMemories(s.db, embedder?.model ?? model)).length : s.memories.count(),
+    vectors: schema
+      ? (s.db.one<{ n: number }>(`SELECT count(*) AS n FROM tal_semantic_vectors WHERE model = ?`, current)?.n ?? 0)
+      : 0,
+    pending: !enabled ? 0 : schema ? (await pendingMemories(s.db, current, embedder?.dims)).length : s.memories.count(),
     embeddings_today: schema ? embeddingsToday(s.db, UsageService.day()) : 0,
     cap: config?.maxEmbeddingsPerDay ?? DEFAULT_SEMANTIC_CONFIG.maxEmbeddingsPerDay,
   });
@@ -175,7 +178,7 @@ semanticRoutes.post("/semantic/reindex", async (c) => {
     report = await runIndexer(ctx, { maxEmbed: LAZY_INDEX_BATCH });
     embedded += report.embedded;
   } while (report.pending > 0 && !report.capped && report.embedded > 0);
-  const pending = (await pendingMemories(s.db, ctx.embedder?.model ?? config.model)).length;
+  const pending = (await pendingMemories(s.db, ctx.embedder?.model ?? config.model, ctx.embedder?.dims)).length;
   return c.json({
     embedded,
     pending,

@@ -29,13 +29,28 @@ Defaults come from `DEFAULT_SEMANTIC_CONFIG` in
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Module on or off |
-| `model` | `@cf/baai/bge-small-en-v1.5` | Workers AI embedding model |
+| `model` | `@cf/baai/bge-m3` | Workers AI embedding model (1024 dimensions) |
 | `maxEmbeddingsPerDay` | `500` | Daily embedding cap (0 to 10,000) |
-| `vectorFloor.absolute` | `0.5` | Minimum cosine score for a vector hit |
+| `vectorFloor.absolute` | `0.55` | Minimum cosine score for a vector hit |
 | `vectorFloor.relative` | `0.1` | A vector hit must also be within this of the best hit |
 
 Turning it off keeps the vectors, so turning it back on only embeds what
 changed in the meantime.
+
+### Changing the embedding model
+
+Vectors are stored per model. Recall only compares vectors of the configured
+model and its size, so changing `model` never mixes old and new vectors: every
+memory is re-embedded for the new model, lazily on the next chat turns or all at
+once with **Reindex**, and keyword search covers the gap meanwhile. A stored
+config that is still the untouched old default (`@cf/baai/bge-small-en-v1.5`
+with floors 0.5 and 0.1) reads as the bge-m3 defaults, so such an instance moves
+to bge-m3 without a Settings change. An owner who picks bge-small and sets those
+exact floors by hand also reads as bge-m3.
+
+bge-m3 compresses its cosines (correct hits about 0.43 to 0.66), so a newer
+near-duplicate is pulled in beside a selected memory at a stored cosine of 0.57
+under bge-m3 and 0.70 under every other model.
 
 ## How recall works
 
@@ -78,7 +93,7 @@ The prefix costs about 10 tokens per memory.
 | Budget | Target |
 | --- | --- |
 | Embedding cap | 500 per day by default (`maxEmbeddingsPerDay`), separate from the AI request limit |
-| Neurons | About 0.1 per turn; a backfill of 1,000 memories is about 55 |
+| Neurons | About 0.06 per turn at 1,075 neurons per million input tokens; a backfill of 1,000 memories is about 32 |
 | Cosine scan | ≤ 5 ms at 5,000 memories |
 | Storage | One vector row per memory |
 | New npm dependencies | 0 |
@@ -136,9 +151,9 @@ into its own. To remove them once, recommended after switching:
 
 ## Known limitation
 
-bge-small matches meaning, not loose associations. With "I'm afraid of
-heights" and "My knee surgery was in August" saved, "Plan me a Saturday
-adventure in the mountains" scores both below the floor, so neither is
+The embedding model matches meaning, not loose associations. With "I'm afraid
+of heights" and "My knee surgery was in August" saved, "Plan me a Saturday
+adventure in the mountains" can score both below the floor, so neither is
 recalled. The live eval reports this case but never fails on it. Lowering
 `vectorFloor` trades this for more noise in other answers.
 

@@ -21,10 +21,25 @@ export type SemanticConfig = z.infer<typeof semanticConfigSchema>;
 
 export const DEFAULT_SEMANTIC_CONFIG: SemanticConfig = {
   enabled: false,
-  model: "@cf/baai/bge-small-en-v1.5",
+  model: "@cf/baai/bge-m3",
   maxEmbeddingsPerDay: 500,
-  vectorFloor: { absolute: 0.5, relative: 0.1 },
+  vectorFloor: { absolute: 0.55, relative: 0.1 },
 };
+
+/** The default model before bge-m3. Stored with its untouched 0.5/0.1 floors, it reads as the new defaults. */
+export const LEGACY_DEFAULT_MODEL = "@cf/baai/bge-small-en-v1.5";
+const LEGACY_DEFAULT_FLOOR = { absolute: 0.5, relative: 0.1 };
+
+/** True for a stored legacy model whose floors are absent or exactly the legacy defaults. */
+function isLegacyDefault(model: unknown, floor: unknown): boolean {
+  if (model !== LEGACY_DEFAULT_MODEL) return false;
+  if (floor === undefined) return true;
+  if (!floor || typeof floor !== "object" || Array.isArray(floor)) return false;
+  const f = floor as Record<string, unknown>;
+  return (
+    Object.keys(f).length === 2 && f.absolute === LEGACY_DEFAULT_FLOOR.absolute && f.relative === LEGACY_DEFAULT_FLOOR.relative
+  );
+}
 
 /** A partial update; fields outside the four config fields are stripped. */
 export const semanticConfigPatchSchema = semanticConfigSchema
@@ -47,6 +62,8 @@ const defined = <T extends object>(obj: T): Partial<T> =>
  * (the feature was never enabled). Unknown fields, such as the fork's `pastWeight`,
  * are ignored. A present but invalid value reads as the defaults, keeping `enabled`
  * when it is a boolean. Pass `db` to tell an unparseable stored value from an absent key.
+ * A stored untouched legacy default (bge-small with floors 0.5/0.1) reads with the current
+ * default model and floors; the stored value itself is never rewritten.
  */
 export function readSemanticConfig(settings: SettingsService, db?: Database): SemanticConfig | null {
   const stored = settings.getJson<unknown>(SEMANTIC_CONFIG_KEY);
@@ -55,7 +72,10 @@ export function readSemanticConfig(settings: SettingsService, db?: Database): Se
     return present ? defaults() : null;
   }
   if (typeof stored !== "object" || Array.isArray(stored)) return defaults();
-  const partial = stored as Record<string, unknown>;
+  const raw = stored as Record<string, unknown>;
+  const partial = isLegacyDefault(raw.model, raw.vectorFloor)
+    ? { ...raw, model: DEFAULT_SEMANTIC_CONFIG.model, vectorFloor: { ...DEFAULT_SEMANTIC_CONFIG.vectorFloor } }
+    : raw;
   const enabled = typeof partial.enabled === "boolean" ? partial.enabled : false;
   const floor = partial.vectorFloor;
   const parsed = semanticConfigSchema.safeParse({

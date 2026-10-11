@@ -4,7 +4,7 @@ import { estimateTokens } from "../ai/provider";
 import type { Services } from "../services/container";
 import { UsageService } from "../services/usage";
 import type { SemanticConfig } from "./config";
-import { cosine, createEmbedder, decodeVector, embeddingsToday, recordEmbeddings } from "./embeddings";
+import { MODEL_DIMS, cosine, createEmbedder, decodeVector, embeddingsToday, recordEmbeddings } from "./embeddings";
 import { type IndexerContext, runIndexer } from "./indexer";
 import { ensureSemanticSchema } from "./migrations";
 
@@ -19,11 +19,22 @@ export const LAZY_INDEX_BATCH = 50;
 /** Appended after two or more recalled memories so the model resolves a conflict by recency. */
 export const NEWER_WINS_NOTE = "If two memories conflict, the more recently saved one is current.";
 /**
- * Stored-vector cosine at which a newer memory is pulled in beside a selected one. Measured on
- * bge-small: Bug/Tesla 0.72-0.79 and Portland/Denver 0.748 pull in; Porsche/Bug 0.523,
- * Porsche/Tesla 0.589 and vegetarian/jazz 0.684 do not.
+ * Default stored-vector cosine at which a newer memory is pulled in beside a selected one.
+ * Measured on bge-small: Bug/Tesla 0.72-0.79 and Portland/Denver 0.748 pull in; Porsche/Bug
+ * 0.523, Porsche/Tesla 0.589 and vegetarian/jazz 0.684 do not.
  */
 export const NEWER_DUPLICATE_COSINE = 0.7;
+/**
+ * Per-model overrides of NEWER_DUPLICATE_COSINE. bge-m3 compresses its cosines: Bug/Tesla
+ * 0.579-0.654 and Portland/Denver 0.767 pull in; Porsche vs the car memories 0.524-0.554 do
+ * not. Unrelated preference pairs reach 0.60-0.78, accepted because preferences are padded in anyway.
+ */
+export const NEWER_DUPLICATE_COSINE_BY_MODEL: Record<string, number> = { "@cf/baai/bge-m3": 0.57 };
+
+/** The newer near-duplicate cosine for `model`. */
+export function newerDuplicateCosine(model: string): number {
+  return NEWER_DUPLICATE_COSINE_BY_MODEL[model] ?? NEWER_DUPLICATE_COSINE;
+}
 /** Most newer near-duplicates one selected memory pulls in. */
 export const MAX_NEWER_PER_HIT = 2;
 
@@ -79,15 +90,17 @@ async function embedQuery(ctx: SemanticContext, query: string): Promise<Float32A
 }
 
 /**
- * Brute-force cosine over every stored vector for `model`, keeping hits at or above the
- * absolute floor and within `relative` of the best hit, best first.
+ * Brute-force cosine over every stored vector of `model` with the query's dims, keeping hits
+ * at or above the absolute floor and within `relative` of the best hit, best first. Rows of
+ * another model or size are never scored.
  */
 function scanVectors(ctx: SemanticContext, model: string, query: Float32Array): { id: string; cosine: number }[] {
   const { absolute, relative } = ctx.config.vectorFloor;
   const scored: { id: string; cosine: number }[] = [];
   for (const row of ctx.db.all<{ memory_id: string; vector: string }>(
-    `SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ?`,
+    `SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ? AND dims = ?`,
     model,
+    query.length,
   )) {
     const c = cosine(query, decodeVector(row.vector));
     if (c >= absolute) scored.push({ id: row.memory_id, cosine: c });
@@ -137,21 +150,27 @@ const isNewer = (a: Memory, b: Memory) =>
 
 /**
  * After selection, each selected hit pulls in up to MAX_NEWER_PER_HIT newer memories whose
- * stored vector is within NEWER_DUPLICATE_COSINE of its own, so a superseded fact never reaches
+ * stored vector is within the model's newerDuplicateCosine of its own, so a superseded fact never reaches
  * the model without its replacement. Pulled memories sit right after their puller with its fused
  * score and never pull further. A full list drops its weakest non-pulled hit that pulled nothing;
- * when there is none the pull is skipped. Uses stored vectors only: no embedder calls.
+ * when there is none the pull is skipped. Uses stored vectors only: no embedder calls. Only rows of
+ * the current model and its dims are read; with the dims still unknown, only equal-length vectors compare.
  */
 export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: number): RecallHit[] {
   const out = hits.slice(0, Math.max(0, limit));
   if (out.length === 0) return out;
+  const model = ctx.embedder?.model ?? ctx.config.model;
+  const dims = ctx.embedder?.dims || MODEL_DIMS[model] || 0;
+  const threshold = newerDuplicateCosine(model);
   const vectors = new Map<string, Float32Array>();
-  for (const row of ctx.db.all<{ memory_id: string; vector: string }>(
-    `SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ?`,
-    ctx.embedder?.model ?? ctx.config.model,
-  )) {
-    vectors.set(row.memory_id, decodeVector(row.vector));
-  }
+  const rows = dims
+    ? ctx.db.all<{ memory_id: string; vector: string }>(
+        `SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ? AND dims = ?`,
+        model,
+        dims,
+      )
+    : ctx.db.all<{ memory_id: string; vector: string }>(`SELECT memory_id, vector FROM tal_semantic_vectors WHERE model = ?`, model);
+  for (const row of rows) vectors.set(row.memory_id, decodeVector(row.vector));
   const seen = new Set(out.map((h) => h.memory.id));
   const pulled = new Set<RecallHit>();
   const pullers = new Set<RecallHit>();
@@ -160,9 +179,9 @@ export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: numb
     if (!own || !out.includes(puller)) continue;
     const candidates: { memory: Memory; cosine: number }[] = [];
     for (const [id, vector] of vectors) {
-      if (seen.has(id)) continue;
+      if (seen.has(id) || vector.length !== own.length) continue;
       const c = cosine(own, vector);
-      if (c < NEWER_DUPLICATE_COSINE) continue;
+      if (c < threshold) continue;
       const memory = ctx.services.memories.get(id);
       if (memory && isNewer(memory, puller.memory)) candidates.push({ memory, cosine: c });
     }

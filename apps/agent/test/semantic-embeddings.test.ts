@@ -4,6 +4,7 @@ import { invalidateSemanticCache } from "../src/semantic";
 import { deleteSemanticConfig } from "../src/semantic/config";
 import {
   EMBEDDING_DIMS,
+  MODEL_DIMS,
   MockEmbedder,
   WorkersAiEmbedder,
   contentHash,
@@ -85,6 +86,37 @@ describe("semantic embeddings", () => {
       fakeAi((_, input) => ({ data: input.text.map(() => Array(EMBEDDING_DIMS).fill("x")) })),
     ];
     for (const ai of bad) await expect(new WorkersAiEmbedder(ai, model).embed(["a", "b"])).rejects.toThrow();
+  });
+
+  it("Workers AI embedder takes its dims from the model", async () => {
+    const m3 = "@cf/baai/bge-m3";
+    expect(MODEL_DIMS[m3]).toBe(1024);
+    const wide = fakeAi((_, input) => ({ shape: [input.text.length, 1024], data: rows(input.text.length, 1024) }));
+    const narrow = fakeAi((_, input) => ({ shape: [input.text.length, EMBEDDING_DIMS], data: rows(input.text.length) }));
+
+    const embedder = new WorkersAiEmbedder(wide, m3);
+    expect(embedder.dims).toBe(1024);
+    expect((await embedder.embed(["a", "b"])).map((v) => v.length)).toEqual([1024, 1024]);
+    await expect(new WorkersAiEmbedder(narrow, m3).embed(["a"])).rejects.toThrow(/1024/);
+
+    const small = "@cf/baai/bge-small-en-v1.5";
+    expect(new WorkersAiEmbedder(narrow, small).dims).toBe(384);
+    await expect(new WorkersAiEmbedder(wide, small).embed(["a"])).rejects.toThrow(/384/);
+
+    const unknown = new WorkersAiEmbedder(fakeAi((_, input) => ({ data: rows(input.text.length, 512) })), "@cf/other/model");
+    expect(unknown.dims).toBe(0);
+    expect((await unknown.embed(["a", "b"]))[1]).toHaveLength(512);
+    expect(unknown.dims).toBe(512);
+    expect(await unknown.embed(["c"])).toHaveLength(1);
+
+    const drifting = fakeAi((_, input) => ({ data: rows(input.text.length, input.text.length === 1 ? 256 : 512) }));
+    const fresh = new WorkersAiEmbedder(drifting, "@cf/other/model");
+    await fresh.embed(["a", "b"]);
+    await expect(fresh.embed(["c"])).rejects.toThrow();
+    const ragged = fakeAi(() => ({ data: [Array(512).fill(0.1), Array(256).fill(0.1)] }));
+    await expect(new WorkersAiEmbedder(ragged, "@cf/other/model").embed(["a", "b"])).rejects.toThrow();
+    const empty = fakeAi(() => ({ data: [[]] }));
+    await expect(new WorkersAiEmbedder(empty, "@cf/other/model").embed(["a"])).rejects.toThrow();
   });
 
   it("createEmbedder mirrors the chat provider selection", async () => {

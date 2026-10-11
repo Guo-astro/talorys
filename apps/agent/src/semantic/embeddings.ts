@@ -2,7 +2,16 @@ import type { Env } from "../env";
 import type { Database } from "../db/database";
 import type { SettingsService } from "../services/settings";
 
+/** Dimensions of the mock embedder's vectors. */
 export const EMBEDDING_DIMS = 384;
+
+/** Output dimensions of the Workers AI embedding models whose size is known up front. */
+export const MODEL_DIMS: Record<string, number> = {
+  "@cf/baai/bge-small-en-v1.5": 384,
+  "@cf/baai/bge-base-en-v1.5": 768,
+  "@cf/baai/bge-large-en-v1.5": 1024,
+  "@cf/baai/bge-m3": 1024,
+};
 
 export interface Embedder {
   readonly model: string;
@@ -10,14 +19,24 @@ export interface Embedder {
   embed(texts: string[]): Promise<Float32Array[]>;
 }
 
-/** Workers AI text embeddings in one call. Throws on any failure or malformed output. */
+/**
+ * Workers AI text embeddings in one call. Throws on any failure or malformed output.
+ * A model missing from MODEL_DIMS starts at 0 dims and takes its size from the first
+ * successful response; every later response must match it.
+ */
 export class WorkersAiEmbedder implements Embedder {
-  readonly dims = EMBEDDING_DIMS;
+  private size: number;
 
   constructor(
     private readonly ai: Ai,
     readonly model: string,
-  ) {}
+  ) {
+    this.size = MODEL_DIMS[model] ?? 0;
+  }
+
+  get dims(): number {
+    return this.size;
+  }
 
   async embed(texts: string[]): Promise<Float32Array[]> {
     if (texts.length === 0) return [];
@@ -26,12 +45,16 @@ export class WorkersAiEmbedder implements Embedder {
     if (!Array.isArray(data) || data.length !== texts.length) {
       throw new Error(`Embedding response had ${Array.isArray(data) ? data.length : "no"} vectors for ${texts.length} texts`);
     }
-    return data.map((row) => {
-      if (!Array.isArray(row) || row.length !== this.dims || !row.every((v) => typeof v === "number" && Number.isFinite(v))) {
-        throw new Error(`Embedding vector does not have ${this.dims} numeric dimensions`);
+    const first: unknown = data[0];
+    const dims = this.size || (Array.isArray(first) ? first.length : 0);
+    const vectors = data.map((row) => {
+      if (dims <= 0 || !Array.isArray(row) || row.length !== dims || !row.every((v) => typeof v === "number" && Number.isFinite(v))) {
+        throw new Error(`Embedding vector does not have ${this.size || "a consistent positive number of"} numeric dimensions`);
       }
       return Float32Array.from(row as number[]);
     });
+    this.size = dims;
+    return vectors;
   }
 }
 

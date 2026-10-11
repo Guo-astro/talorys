@@ -31,12 +31,20 @@ export interface PendingMemory {
 }
 
 /**
- * Memories without a current vector for `model`: no row, a row from another model, or
- * one whose content hash no longer matches. Oldest update first. Needs the schema.
+ * Memories without a current vector for `model`: no row, a row from another model or (when
+ * `dims` is known) another size, or one whose content hash no longer matches. Oldest update
+ * first. Needs the schema.
  */
-export async function pendingMemories(db: Database, model: string): Promise<PendingMemory[]> {
-  const rows = db.all<{ id: string; content: string; category: string; model: string | null; content_hash: string | null }>(
-    `SELECT m.id, m.content, m.category, v.model, v.content_hash
+export async function pendingMemories(db: Database, model: string, dims = 0): Promise<PendingMemory[]> {
+  const rows = db.all<{
+    id: string;
+    content: string;
+    category: string;
+    model: string | null;
+    dims: number | null;
+    content_hash: string | null;
+  }>(
+    `SELECT m.id, m.content, m.category, v.model, v.dims, v.content_hash
      FROM tal_memories m LEFT JOIN tal_semantic_vectors v ON v.memory_id = m.id
      ORDER BY m.updated_at ASC, m.id ASC`,
   );
@@ -44,7 +52,7 @@ export async function pendingMemories(db: Database, model: string): Promise<Pend
   for (const row of rows) {
     const text = embeddingText(row);
     const hash = await contentHash(text);
-    if (row.model !== model || row.content_hash !== hash) pending.push({ id: row.id, text, hash });
+    if (row.model !== model || (dims > 0 && row.dims !== dims) || row.content_hash !== hash) pending.push({ id: row.id, text, hash });
   }
   return pending;
 }
@@ -117,7 +125,7 @@ async function indexOnce({ db, config, embedder }: IndexerContext, maxEmbed: num
     if (!config.enabled) return { ...report, skipped: "disabled" };
     ensureSemanticSchema(db);
     report.purged = purgeOrphans(db);
-    const pending = await pendingMemories(db, embedder?.model ?? config.model);
+    const pending = await pendingMemories(db, embedder?.model ?? config.model, embedder?.dims);
     report.pending = pending.length;
     if (!embedder) return { ...report, skipped: "no-embedder" };
     if (pending.length === 0) return report;
