@@ -8,6 +8,7 @@ import { chatRoutes } from "./routes/chat";
 import { dataRoutes } from "./routes/data";
 import { automationRoutes } from "./routes/automations";
 import { systemRoutes } from "./routes/system";
+import { semanticRoutes } from "../semantic/routes";
 
 export interface AppEnv {
   Bindings: { agent: TalorysAgent; env: Env };
@@ -28,6 +29,8 @@ export function createApi() {
   app.use("*", csrfProtection);
   app.use("*", requireSession);
 
+  // First, so its middleware wraps the upstream /memories and /import handlers.
+  app.route("/", semanticRoutes);
   app.route("/", systemRoutes);
   app.route("/auth", authRoutes);
   app.route("/", chatRoutes);

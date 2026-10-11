@@ -123,7 +123,13 @@ export class ScriptedUi implements Ui {
     if (!c) throw new Error(`No choice ${label}`);
     return c.value;
   }
-  async confirm(message: string) {
+  async confirm(message: string, initial?: boolean) {
+    // A prompt with an explicit default (e.g. the semantic recall opt-in) takes that default
+    // when the script has no boolean ready, so scripts written before the prompt still line up.
+    if (initial !== undefined && typeof this.answers[0] !== "boolean" && this.answers[0] !== CANCEL) {
+      this.prompts.push(message);
+      return initial;
+    }
     return this.next<boolean>(message);
   }
 }

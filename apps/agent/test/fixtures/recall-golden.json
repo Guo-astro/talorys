@@ -1,0 +1,108 @@
+{
+  "cases": [
+    {
+      "id": "S-car",
+      "gate": true,
+      "enabled": true,
+      "memories": [
+        { "content": "I drive a VW Bug from the 60's", "category": "fact", "source": "manual", "created_at": "2026-09-01T15:00:00.000Z", "updated_at": "2026-10-09T15:00:00.000Z" },
+        { "content": "I just traded my bug in for a 2025 Tesla.", "category": "fact", "source": "manual", "created_at": "2026-10-10T15:00:00.000Z", "updated_at": "2026-10-10T15:00:00.000Z" }
+      ],
+      "query": "What car do I drive?",
+      "expect": { "present": ["2025 Tesla", "VW Bug"], "order": ["2025 Tesla", "VW Bug"], "datePrefix": true }
+    },
+    {
+      "id": "S-oil",
+      "gate": true,
+      "enabled": true,
+      "memories": [
+        { "content": "I drive a VW Bug from the 60's", "category": "fact", "source": "manual", "created_at": "2026-09-01T15:00:00.000Z", "updated_at": "2026-10-09T15:00:00.000Z" },
+        { "content": "I just traded my bug in for a 2025 Tesla.", "category": "fact", "source": "manual", "created_at": "2026-10-10T15:00:00.000Z", "updated_at": "2026-10-10T15:00:00.000Z" }
+      ],
+      "query": "how often do i need to change the oil on my car",
+      "expect": { "present": ["2025 Tesla", "VW Bug"], "order": ["2025 Tesla", "VW Bug"], "datePrefix": true }
+    },
+    {
+      "id": "S-denver",
+      "gate": true,
+      "enabled": true,
+      "memories": [
+        { "content": "I live in Portland", "category": "fact", "source": "manual", "created_at": "2026-03-02T18:00:00.000Z", "updated_at": "2026-03-02T18:00:00.000Z" },
+        { "content": "I live in Denver", "category": "fact", "source": "manual", "created_at": "2026-09-14T18:00:00.000Z", "updated_at": "2026-09-14T18:00:00.000Z" },
+        { "content": "My favourite colour is green", "category": "preference", "source": "manual", "created_at": "2026-05-01T09:00:00.000Z", "updated_at": "2026-05-01T09:00:00.000Z" },
+        { "content": "I work as a nurse", "category": "fact", "source": "manual", "created_at": "2026-06-01T09:00:00.000Z", "updated_at": "2026-06-01T09:00:00.000Z" },
+        { "content": "My sister is named Ana", "category": "person", "source": "manual", "created_at": "2026-07-01T09:00:00.000Z", "updated_at": "2026-07-01T09:00:00.000Z" },
+        { "content": "I play the cello on Sundays", "category": "habit", "source": "manual", "created_at": "2026-08-01T09:00:00.000Z", "updated_at": "2026-08-01T09:00:00.000Z" }
+      ],
+      "query": "What city do I live in?",
+      "expect": { "present": ["Denver", "Portland"], "order": ["Denver", "Portland"], "datePrefix": true }
+    },
+    {
+      "id": "S-veg",
+      "gate": true,
+      "enabled": true,
+      "categoryVariants": ["preference", "fact"],
+      "memories": [
+        { "content": "I'm vegetarian", "category": "preference", "source": "manual", "created_at": "2026-04-01T12:00:00.000Z", "updated_at": "2026-04-01T12:00:00.000Z" },
+        { "content": "My dog is called Pixel", "category": "fact", "source": "manual", "created_at": "2026-05-01T12:00:00.000Z", "updated_at": "2026-05-01T12:00:00.000Z" },
+        { "content": "I work as a nurse", "category": "fact", "source": "manual", "created_at": "2026-06-01T12:00:00.000Z", "updated_at": "2026-06-01T12:00:00.000Z" }
+      ],
+      "query": "give me a dinner idea",
+      "expect": { "present": ["vegetarian"], "datePrefix": true }
+    },
+    {
+      "id": "S-peanut",
+      "gate": true,
+      "enabled": true,
+      "memories": [
+        { "content": "I'm allergic to peanuts", "category": "fact", "source": "manual", "created_at": "2026-02-01T12:00:00.000Z", "updated_at": "2026-02-01T12:00:00.000Z" },
+        { "content": "My favourite colour is green", "category": "preference", "source": "manual", "created_at": "2026-05-01T12:00:00.000Z", "updated_at": "2026-05-01T12:00:00.000Z" },
+        { "content": "I play the cello on Sundays", "category": "habit", "source": "manual", "created_at": "2026-06-01T12:00:00.000Z", "updated_at": "2026-06-01T12:00:00.000Z" },
+        { "content": "My sister is named Ana", "category": "person", "source": "manual", "created_at": "2026-07-01T12:00:00.000Z", "updated_at": "2026-07-01T12:00:00.000Z" }
+      ],
+      "query": "Is it OK if I eat a Reese's?",
+      "expect": { "present": ["allergic to peanuts"], "datePrefix": true }
+    },
+    {
+      "id": "S-off",
+      "gate": true,
+      "enabled": false,
+      "memories": [
+        { "content": "I like green tea in the morning", "category": "preference", "source": "manual", "created_at": "2026-03-01T08:00:00.000Z", "updated_at": "2026-03-01T08:00:00.000Z" },
+        { "content": "I drive a VW Bug from the 60's", "category": "fact", "source": "manual", "created_at": "2026-04-01T08:00:00.000Z", "updated_at": "2026-04-01T08:00:00.000Z" },
+        { "content": "Tea makes me sleepy after six", "category": "fact", "source": "agent", "created_at": "2026-05-01T08:00:00.000Z", "updated_at": "2026-05-01T08:00:00.000Z" }
+      ],
+      "query": "what tea do I like",
+      "expect": { "present": ["green tea", "Tea makes me sleepy"] }
+    },
+    {
+      "id": "S-noise",
+      "gate": true,
+      "enabled": true,
+      "memories": [
+        { "content": "My favourite colour is green", "category": "preference", "source": "manual", "created_at": "2026-01-01T12:00:00.000Z", "updated_at": "2026-01-01T12:00:00.000Z" },
+        { "content": "I work as a nurse", "category": "fact", "source": "manual", "created_at": "2026-01-02T12:00:00.000Z", "updated_at": "2026-01-02T12:00:00.000Z" },
+        { "content": "My sister is named Ana", "category": "person", "source": "manual", "created_at": "2026-01-03T12:00:00.000Z", "updated_at": "2026-01-03T12:00:00.000Z" },
+        { "content": "I play the cello on Sundays", "category": "habit", "source": "manual", "created_at": "2026-01-04T12:00:00.000Z", "updated_at": "2026-01-04T12:00:00.000Z" },
+        { "content": "My dog is called Pixel", "category": "fact", "source": "manual", "created_at": "2026-01-05T12:00:00.000Z", "updated_at": "2026-01-05T12:00:00.000Z" },
+        { "content": "Prefers concise answers", "category": "preference", "source": "manual", "created_at": "2026-01-06T12:00:00.000Z", "updated_at": "2026-01-06T12:00:00.000Z" },
+        { "content": "Learning Portuguese with an app", "category": "goal", "source": "manual", "created_at": "2026-01-07T12:00:00.000Z", "updated_at": "2026-01-07T12:00:00.000Z" },
+        { "content": "Building a birdhouse with my nephew", "category": "project", "source": "manual", "created_at": "2026-01-08T12:00:00.000Z", "updated_at": "2026-01-08T12:00:00.000Z" }
+      ],
+      "query": "what's the capital of France?",
+      "expect": { "present": [], "noVectorHits": true }
+    },
+    {
+      "id": "S-mountain",
+      "gate": false,
+      "enabled": true,
+      "memories": [
+        { "content": "I'm afraid of heights", "category": "fact", "source": "manual", "created_at": "2026-06-01T12:00:00.000Z", "updated_at": "2026-06-01T12:00:00.000Z" },
+        { "content": "My knee surgery was in August", "category": "fact", "source": "manual", "created_at": "2026-08-20T12:00:00.000Z", "updated_at": "2026-08-20T12:00:00.000Z" },
+        { "content": "My boss is coming over Saturday", "category": "fact", "source": "manual", "created_at": "2026-10-05T12:00:00.000Z", "updated_at": "2026-10-05T12:00:00.000Z" }
+      ],
+      "query": "Plan me a Saturday adventure in the mountains",
+      "expect": { "present": [] }
+    }
+  ]
+}

@@ -24,6 +24,7 @@ Options
   --dir <path>          Installation directory (default: ./talorys, or the current directory if it is one)
   --account-id <id>     Cloudflare account to use
   --name <name>         Agent name (default: Talorys)
+  --semantic / --no-semantic  Turn semantic recall on or off without asking (default No; update keeps the last answer)
   -y, --yes             Skip confirmation prompts
   -h, --help            Show this help
   -v, --version         Show version
@@ -131,6 +132,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       dir: { type: "string" },
       "account-id": { type: "string" },
       name: { type: "string" },
+      semantic: { type: "boolean" },
+      "no-semantic": { type: "boolean" },
       yes: { type: "boolean", short: "y" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
@@ -144,6 +147,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     process.stdout.write(`${readTemplateInfo().version}\n`);
     return 0;
   }
+  const semantic = values["no-semantic"] ? false : values.semantic;
   const [first, second] = positionals;
   const command = first && COMMANDS.has(first) ? first : "install";
   const dirArg = values.dir ?? (command === "install" ? (first && !COMMANDS.has(first) ? first : second) : second);
@@ -158,11 +162,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const password = process.env.TALORYS_OWNER_PASSWORD;
 
   try {
+    if (values.semantic && values["no-semantic"]) throw new CliError("Pass either --semantic or --no-semantic, not both.");
     switch (command) {
       case "install":
       case "update":
         await install(
-          { dir, yes: values.yes, accountId: values["account-id"], agentName: values.name, password, mode: command },
+          { dir, yes: values.yes, accountId: values["account-id"], agentName: values.name, semantic, password, mode: command },
           deps,
         );
         return 0;

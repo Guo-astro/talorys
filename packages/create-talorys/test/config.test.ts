@@ -90,6 +90,19 @@ describe("post-deploy verification", () => {
   });
 });
 
+describe("semantic recall default", () => {
+  const base = { workerName: "w", installationId: "abcd1234", version: "1", timezone: "UTC", agentName: "Ada" };
+
+  it("adds only TALORYS_SEMANTIC_DEFAULT when enabled and leaves upstream vars untouched otherwise", () => {
+    const upstream = generateAgentConfig(base);
+    expect(generateAgentConfig({ ...base, semanticDefault: false })).toEqual(upstream);
+    expect(toJsonc(generateAgentConfig({ ...base, semanticDefault: false }))).toBe(toJsonc(upstream));
+    const on = generateAgentConfig({ ...base, semanticDefault: true });
+    expect(on.vars).toEqual({ ...(upstream.vars as Record<string, string>), TALORYS_SEMANTIC_DEFAULT: "on" });
+    expect({ ...on, vars: upstream.vars }).toEqual(upstream);
+  });
+});
+
 describe("requirements", () => {
   it("requires at least the Node.js version the bundled Wrangler needs", () => {
     const wranglerPkg = JSON.parse(readFileSync(join(__dirname, "../../../node_modules/wrangler/package.json"), "utf8"));

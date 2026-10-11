@@ -10,6 +10,7 @@ import { CloudflareWorkersAIProvider } from "../ai/workers-ai";
 import { MockAIProvider } from "../ai/mock";
 import type { AIProvider } from "../ai/provider";
 import { localDayBounds, formatLocal } from "../services/time";
+import { semanticExtensions } from "../semantic";
 
 interface AgentState {
   /** Unread notifications, kept in agent state for cheap polling. */
@@ -83,7 +84,7 @@ export class TalorysAgent extends Agent<Env, AgentState> {
   }
 
   runner(): AgentRunner {
-    return new AgentRunner(this.services, this.aiProvider());
+    return new AgentRunner(this.services, this.aiProvider(), semanticExtensions(this.services, this.env));
   }
 
   refreshUnread(): void {

@@ -5,6 +5,7 @@ import { AppError, NotFoundError } from "../api/errors";
 import { ALL_TOOLS, ToolExecutor, type ToolDefinition } from "../tools";
 import { buildSystemPrompt } from "./prompt";
 import { SUMMARIZE_THRESHOLD, buildContextWindow, selectRelevantMemories, summarizationPrompt } from "./memory";
+import type { RunnerExtensions } from "../semantic/hooks";
 
 export interface TurnInput {
   conversationId?: string;
@@ -51,6 +52,7 @@ export class AgentRunner {
   constructor(
     private readonly services: Services,
     private readonly provider: AIProvider | null,
+    private readonly ext?: RunnerExtensions,
   ) {}
 
   async *chat(input: TurnInput): AsyncGenerator<ChatStreamEvent> {
@@ -104,7 +106,7 @@ export class AgentRunner {
       }
 
       // 2. Context: relevant memories, summary, recent history within the token budget.
-      const memories = selectRelevantMemories(s.memories, userMessage.content);
+      const memories = this.ext ? await this.ext.selectMemories(userMessage.content) : selectRelevantMemories(s.memories, userMessage.content);
       const history = s.pendingActions
         .withCurrentStatus(s.conversations.messages(conversation.id, { limit: 200 }))
         .filter((m) => m.role === "user" || m.status === "complete")
@@ -154,7 +156,7 @@ export class AgentRunner {
 
       // 3. Tools with per-turn limits.
       const executor = new ToolExecutor(
-        ALL_TOOLS,
+        this.ext?.tools ?? ALL_TOOLS,
         { services: s, timezone: settings.timezone, mode: "chat", conversationId: conversation.id },
         { maxToolCalls: limits.maxToolCalls },
       );
@@ -235,7 +237,7 @@ export class AgentRunner {
     const settings = s.settings.get();
     if (!this.provider) throw new AppError("AI_UNAVAILABLE", "Workers AI is not configured.");
     const executor = new ToolExecutor(
-      ALL_TOOLS,
+      this.ext?.tools ?? ALL_TOOLS,
       { services: s, timezone: settings.timezone, mode: "scheduled" },
       { maxToolCalls: Math.min(settings.limits.maxToolCalls, 4) },
     );
@@ -244,7 +246,7 @@ export class AgentRunner {
       timezone: settings.timezone,
       now: new Date(),
       autoMemory: false,
-      memories: selectRelevantMemories(s.memories, prompt),
+      memories: this.ext ? await this.ext.selectMemories(prompt) : selectRelevantMemories(s.memories, prompt),
       scheduled: true,
     });
     let text = "";
