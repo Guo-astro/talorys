@@ -41,7 +41,9 @@ export interface RecallHit {
 export function rrf(lists: string[][], k = RRF_K): Map<string, number> {
   const scores = new Map<string, number>();
   for (const list of lists) {
-    list.forEach((id, i) => scores.set(id, (scores.get(id) ?? 0) + 1 / (k + i + 1)));
+    list.forEach((id, i) => {
+      scores.set(id, (scores.get(id) ?? 0) + 1 / (k + i + 1));
+    });
   }
   return scores;
 }
