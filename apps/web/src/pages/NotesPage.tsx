@@ -129,15 +129,23 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
   }, [focusMode]);
 
   useEffect(() => {
+    // Ignore a superseded load: a late response must not overwrite what the owner already typed.
+    let stale = false;
     api<{ note: Note }>(`/notes/${id}`)
       .then((r) => {
+        if (stale) return;
         setNote(r.note);
         setTitle(r.note.title);
         setContent(r.note.content);
         setProjectId(r.note.project_id ?? "");
         if (!r.note.content) setMode("edit");
       })
-      .catch(setLoadError);
+      .catch((error) => {
+        if (!stale) setLoadError(error);
+      });
+    return () => {
+      stale = true;
+    };
   }, [id]);
 
   // Compare the title as it will be stored (trimmed, "Untitled" when empty); comparing the raw
