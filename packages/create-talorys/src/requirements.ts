@@ -1,7 +1,7 @@
 import { exec as defaultExec, type Exec } from "./exec";
 import { CliError } from "./errors";
 
-export const MIN_NODE = [20, 18] as const;
+export const MIN_NODE = [22, 0] as const;
 
 export function checkNodeVersion(version = process.versions.node): void {
   const [major = 0, minor = 0] = version.split(".").map(Number);
