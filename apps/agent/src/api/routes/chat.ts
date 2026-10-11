@@ -60,6 +60,8 @@ chatRoutes.post("/chat", async (c) => {
     throw new AppError("CONFLICT", "A response is already being generated in this conversation.");
   }
   const controller = new AbortController();
+  // Claim the conversation now, before any await, so a concurrent request sees the conflict.
+  if (input.conversation_id) agent.activeRuns.set(input.conversation_id, controller);
   const encoder = new TextEncoder();
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();

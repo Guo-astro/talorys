@@ -57,6 +57,10 @@ export function ChatPage() {
 
   const messages = conversation.data?.messages ?? [];
   const streaming = !!stream && !stream.done;
+  // The local stream may belong to a conversation the owner navigated away from; only render it in its own.
+  const streamHere = stream && stream.conversationId === (conversationId ?? null) ? stream : null;
+  // A reply generating server-side that this page isn't streaming (started before a reload or in another tab).
+  const remoteStreaming = !streamHere && !!conversation.data?.streaming;
 
   // Reset transient stream state when switching conversations (unless it belongs to the new one).
   useEffect(() => {
@@ -142,7 +146,7 @@ export function ChatPage() {
   }
 
   function stop() {
-    const convId = stream?.conversationId;
+    const convId = stream?.conversationId ?? (remoteStreaming ? conversationId : null);
     abortRef.current?.abort();
     if (convId) void api("/chat/cancel", { method: "POST", body: { conversation_id: convId } }).catch(() => {});
   }
@@ -152,7 +156,7 @@ export function ChatPage() {
     return last && last.role === "assistant" && last.status === "error" ? last : null;
   }, [messages]);
 
-  const showEmpty = !conversationId && !stream;
+  const showEmpty = !conversationId && !streamHere;
 
   return (
     <div className="flex h-full">
@@ -177,11 +181,11 @@ export function ChatPage() {
         >
           {showEmpty ? (
             <EmptyChat name={settings.data?.agentName ?? "Talorys"} onPick={(s) => void send(s)} />
-          ) : conversation.isLoading && !stream ? (
+          ) : conversation.isLoading && !streamHere ? (
             <div className="flex justify-center py-16">
               <Spinner />
             </div>
-          ) : conversation.isError && !stream ? (
+          ) : conversation.isError && !streamHere ? (
             <div className="p-8 text-center text-sm text-fg-muted">This conversation could not be loaded.</div>
           ) : (
             <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 md:px-6">
@@ -190,29 +194,30 @@ export function ChatPage() {
                   <MessageView
                     key={m.id}
                     message={m}
-                    onRetry={lastFailed?.id === m.id && !streaming ? () => void send("", { retry: true }) : undefined}
+                    onRetry={lastFailed?.id === m.id && !streaming && !remoteStreaming ? () => void send("", { retry: true }) : undefined}
                   />
                 ),
               )}
-              {stream && (
+              {streamHere && (
                 <>
-                  {stream.userText && !messages.some((m) => m.role === "user" && m.content === stream.userText && stream.done) && (
-                    <UserBubble text={stream.userText} />
+                  {streamHere.userText && !messages.some((m) => m.role === "user" && m.content === streamHere.userText && streamHere.done) && (
+                    <UserBubble text={streamHere.userText} />
                   )}
                   <AssistantBubble
-                    text={stream.text}
-                    tools={stream.tools}
-                    error={stream.error}
-                    streaming={!stream.done}
-                    onRetry={stream.error && stream.done && conversationId ? () => void send("", { retry: true }) : undefined}
+                    text={streamHere.text}
+                    tools={streamHere.tools}
+                    error={streamHere.error}
+                    streaming={!streamHere.done}
+                    onRetry={streamHere.error && streamHere.done && conversationId ? () => void send("", { retry: true }) : undefined}
                   />
                 </>
               )}
+              {remoteStreaming && <AssistantBubble text="" tools={[]} error={null} streaming />}
             </div>
           )}
         </div>
 
-        <Composer streaming={streaming} onSend={(t) => void send(t)} onStop={stop} autoFocus={showEmpty} />
+        <Composer streaming={streaming || remoteStreaming} onSend={(t) => void send(t)} onStop={stop} autoFocus={showEmpty} />
       </section>
 
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} title="Conversations">

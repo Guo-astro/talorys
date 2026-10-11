@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import type { Note, Project } from "@talorys/shared";
 import { ArrowLeft, CircleCheck, Crosshair, Eye, FolderKanban, ListTodo, NotebookPen, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { Markdown } from "../components/Markdown";
@@ -139,11 +140,30 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
       .catch(setLoadError);
   }, [id]);
 
-  const dirty = !!note && (title !== note.title || content !== note.content || projectId !== (note.project_id ?? ""));
+  // Compare the title as it will be stored (trimmed, "Untitled" when empty); comparing the raw
+  // input would keep the note dirty forever and autosave in a loop.
+  const savedTitle = title.trim() || "Untitled";
+  const dirty = !!note && (savedTitle !== note.title || content !== note.content || projectId !== (note.project_id ?? ""));
+  const body = { title: savedTitle, content, project_id: projectId || null };
 
-  const save = useApiMutation(
-    () => api<{ note: Note }>(`/notes/${id}`, { method: "PATCH", body: { title: title.trim() || "Untitled", content, project_id: projectId || null } }),
-    { invalidate: [["notes"]], onSuccess: (r) => setNote(r.note) },
+  const save = useApiMutation(() => api<{ note: Note }>(`/notes/${id}`, { method: "PATCH", body }), {
+    invalidate: [["notes"]],
+    onSuccess: (r) => setNote(r.note),
+  });
+
+  // Flush pending edits when leaving the note (switching notes or pages) before autosave fires.
+  const pending = useRef<{ dirty: boolean; body: typeof body }>({ dirty, body });
+  pending.current = { dirty, body };
+  const deleted = useRef(false);
+  const qc = useQueryClient();
+  useEffect(
+    () => () => {
+      if (!pending.current.dirty || deleted.current) return;
+      void api(`/notes/${id}`, { method: "PATCH", body: pending.current.body })
+        .then(() => qc.invalidateQueries({ queryKey: ["notes"] }))
+        .catch(() => {});
+    },
+    [id, qc],
   );
 
   // Autosave shortly after typing stops.
@@ -156,11 +176,17 @@ function NoteEditor({ id, onBack }: { id: string; onBack: () => void }) {
   }, [dirty, title, content, projectId, save.isPending]);
 
   const toggleTask = useCallback((line: number) => setContent((c) => toggleTaskLine(c, line)), []);
-  const remove = useApiMutation(() => api(`/notes/${id}`, { method: "DELETE" }), {
-    invalidate: [["notes"]],
-    success: "Note deleted",
-    onSuccess: onBack,
-  });
+  const remove = useApiMutation(
+    async () => {
+      await api(`/notes/${id}`, { method: "DELETE" });
+      deleted.current = true;
+    },
+    {
+      invalidate: [["notes"]],
+      success: "Note deleted",
+      onSuccess: onBack,
+    },
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

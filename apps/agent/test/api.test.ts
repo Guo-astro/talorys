@@ -69,6 +69,21 @@ describe("notes and projects", () => {
     expect((await c.json(`/api/notes/${note.id}`)).note.project_id).toBeNull();
     await c.call(`/api/notes/${note.id}`, { method: "DELETE" });
   });
+
+  it("partial updates leave omitted fields unchanged", async () => {
+    const c = await loggedIn();
+    const { project } = await c.json("/api/projects", { method: "POST", body: { name: "Kitchen", description: "Renovation plan", status: "paused" } });
+    const { project: archived } = await c.json(`/api/projects/${project.id}`, { method: "PATCH", body: { status: "archived" } });
+    expect(archived).toMatchObject({ name: "Kitchen", description: "Renovation plan", status: "archived" });
+    const { project: renamed } = await c.json(`/api/projects/${project.id}`, { method: "PATCH", body: { name: "Kitchen 2" } });
+    expect(renamed).toMatchObject({ description: "Renovation plan", status: "archived" });
+    await c.call(`/api/projects/${project.id}`, { method: "DELETE" });
+
+    const { memory } = await c.json("/api/memories", { method: "POST", body: { content: "Allergic to peanuts", category: "fact" } });
+    const { memory: edited } = await c.json(`/api/memories/${memory.id}`, { method: "PATCH", body: { content: "Allergic to peanuts and cashews" } });
+    expect(edited.category).toBe("fact");
+    await c.call(`/api/memories/${memory.id}`, { method: "DELETE" });
+  });
 });
 
 describe("chat (mock provider)", () => {
@@ -100,6 +115,17 @@ describe("chat (mock provider)", () => {
     expect((await c.json("/api/conversations?q=oat")).conversations[0].title).toBe("Groceries");
     await c.call(`/api/conversations/${convId}`, { method: "DELETE" });
     expect((await c.call(`/api/conversations/${convId}`)).status).toBe(404);
+  });
+
+  it("rejects a second concurrent turn in the same conversation", async () => {
+    const c = await loggedIn();
+    const { conversation } = await c.json("/api/conversations", { method: "POST", body: {} });
+    const body = { conversation_id: conversation.id, message: "list tasks" };
+    const results = await Promise.all([c.call("/api/chat", { method: "POST", body }), c.call("/api/chat", { method: "POST", body })]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    await readSse(results.find((r) => r.status === 200)!);
+    expect((await c.json(`/api/conversations/${conversation.id}`)).messages).toHaveLength(2);
+    await c.call(`/api/conversations/${conversation.id}`, { method: "DELETE" });
   });
 
   it("enforces the daily AI request limit and still serves non-AI features", async () => {
@@ -161,6 +187,15 @@ describe("settings, usage, export and import", () => {
     await c.call(`/api/tasks/${task.id}`, { method: "DELETE" });
     for (let i = 0; i < 2; i++) expect((await c.call("/api/import", { method: "POST", body: backup })).status).toBe(200);
     expect((await c.json("/api/tasks?q=Backup")).tasks).toHaveLength(1);
+
+    // Importing a disabled copy of an armed automation pauses it and drops its live schedule.
+    const { automation } = await c.json("/api/automations", { method: "POST", body: { name: "Daily", kind: "reminder", message: "Stretch", schedule: { type: "daily", time: "08:00" } } });
+    const disabled = { ...backup, data: { ...backup.data, automations: [{ id: automation.id, name: "Daily", kind: "reminder", message: "Stretch", schedule: automation.schedule, enabled: false }] } };
+    expect((await c.call("/api/import", { method: "POST", body: disabled })).status).toBe(200);
+    const paused = (await c.json("/api/automations")).automations.find((a: any) => a.id === automation.id);
+    expect(paused).toMatchObject({ enabled: false, status: "paused", schedule_id: null, next_run: null });
+    expect(await inAgent((a) => a.getScheduleById(automation.schedule_id))).toBeUndefined();
+    await c.call(`/api/automations/${automation.id}`, { method: "DELETE" });
 
     // Invalid and future-version backups are rejected without changes.
     expect((await c.call("/api/import", { method: "POST", body: { format: "nope" } })).status).toBe(400);

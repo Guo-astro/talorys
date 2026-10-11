@@ -90,6 +90,28 @@ test.describe("Talorys owner experience", () => {
     await expect(page.getByRole("button", { name: /e2e Packing list/ })).toBeVisible();
   });
 
+  test("note autosave settles and edits survive switching notes", async ({ page }) => {
+    await login(page);
+    await page.getByRole("link", { name: "Notes" }).first().click();
+    await page.getByRole("button", { name: "New note" }).click();
+    // A title with surrounding spaces is stored trimmed; autosave must not loop.
+    await page.getByLabel("Note title").fill("  e2e Spaced title  ");
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+    let patches = 0;
+    page.on("request", (r) => {
+      if (r.method() === "PATCH" && r.url().includes("/api/notes/")) patches++;
+    });
+    await page.waitForTimeout(2500);
+    expect(patches).toBe(0);
+
+    // Typing then switching notes immediately (before autosave fires) keeps the edit.
+    await page.getByRole("button", { name: "New note" }).click();
+    await expect(page.getByLabel("Note title")).toHaveValue("Untitled");
+    await page.getByLabel("Note title").fill("e2e Quick switch");
+    await page.getByRole("button", { name: /e2e Spaced title/ }).click();
+    await expect(page.getByRole("button", { name: /e2e Quick switch/ })).toBeVisible();
+  });
+
   test("notes support todos that can be toggled", async ({ page }) => {
     await login(page);
     await page.getByRole("link", { name: "Notes" }).first().click();

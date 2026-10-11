@@ -39,6 +39,12 @@ export class ToolError extends Error {
 // Only affirmative replies count. Action verbs ("delete", "remove", ...) are excluded so the
 // original request can't double as its own confirmation.
 const CONFIRMATION_PATTERN = /\b(yes|yep|yeah|confirm(ed)?|go ahead|do it|sure|ok(ay)?|proceed)\b/i;
+// Any negation or hesitation ("no, don't do it", "not sure", "wait") voids the confirmation.
+const NEGATION_PATTERN = /\b(no|nope|not|never|don'?t|do not|wait|hold on|hold off)\b|n't\b/i;
+
+function isExplicitConfirmation(message: string): boolean {
+  return CONFIRMATION_PATTERN.test(message) && !NEGATION_PATTERN.test(message);
+}
 
 export interface ExecutorLimits {
   maxToolCalls: number;
@@ -100,7 +106,7 @@ export class ToolExecutor {
     }
     if (tool.permission === "destructive") {
       const confirmed = (parsed.data as { confirmed?: boolean }).confirmed === true;
-      if (!confirmed || !CONFIRMATION_PATTERN.test(this.ctx.ownerMessage)) {
+      if (!confirmed || !isExplicitConfirmation(this.ctx.ownerMessage)) {
         throw new ToolError(
           "This action is destructive. Ask the owner to explicitly confirm, then call again with confirmed: true after they agree.",
         );

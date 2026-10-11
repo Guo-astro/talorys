@@ -94,6 +94,17 @@ describe("brute-force protection", () => {
     expect((await client().call("/api/auth/login", { method: "POST", body: { password: password() } })).status).toBe(200);
   });
 
+  it("cannot be bypassed with parallel attempts", async () => {
+    const c = client();
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => c.call("/api/auth/login", { method: "POST", body: { password: `wrong-${i}` } })),
+    );
+    const statuses = results.map((r) => r.status);
+    expect(statuses.filter((s) => s === 401)).toHaveLength(5);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(7);
+    expect((await c.call("/api/auth/login", { method: "POST", body: { password: password() } })).status).toBe(429);
+  });
+
   it("applies a global limit against distributed guessing", async () => {
     await inAgent((a) => {
       for (let i = 0; i < 25; i++) a.services.db.run(`INSERT INTO tal_login_attempts (client, success, at) VALUES (?, 0, ?)`, `bot-${i}`, Date.now());

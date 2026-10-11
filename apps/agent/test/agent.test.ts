@@ -8,6 +8,7 @@ import { classifyAiError } from "../src/ai/provider";
 import { MIGRATIONS, migrate, schemaVersion } from "../src/db/migrations";
 import { buildContextWindow } from "../src/agent/memory";
 import { buildSystemPrompt } from "../src/agent/prompt";
+import { parseLocalDateTime } from "../src/services/time";
 
 /** A provider that replays a scripted sequence of tool calls, to exercise limits deterministically. */
 class ScriptedProvider implements AIProvider {
@@ -112,6 +113,13 @@ describe("prompt-injection and destructive-action defenses", () => {
       const task2 = agent.services.tasks.create({ title: "Also keep me" });
       const request = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: "delete the task Also keep me" }, { maxToolCalls: 5 });
       await expect(request.execute("delete_task", { task: task2.id, confirmed: true })).rejects.toThrow(/destructive/);
+
+      // Negated or hesitant replies are not confirmations.
+      for (const reply of ["no, don't do it", "I'm not sure", "ok wait", "nope, do not proceed", "yes... actually no"]) {
+        const ex = new ToolExecutor(ALL_TOOLS, { services: agent.services, timezone: "UTC", mode: "chat", ownerMessage: reply }, { maxToolCalls: 5 });
+        await expect(ex.execute("delete_task", { task: task2.id, confirmed: true })).rejects.toThrow(/destructive/);
+      }
+      expect(agent.services.tasks.get(task2.id)).not.toBeNull();
 
       // Cancelling an unknown automation reports an error instead of succeeding.
       await expect(confirmed.execute("cancel_automation", { id: "missing", confirmed: true })).rejects.toThrow(/not found/);
@@ -261,6 +269,12 @@ describe("scheduling", () => {
     const c = await loggedIn();
     expect((await c.call("/api/automations", { method: "POST", body: { name: "x", kind: "reminder", message: "x", schedule: { type: "once", at: "2001-01-01T09:00" } } })).status).toBe(400);
     expect((await c.call("/api/automations", { method: "POST", body: { name: "x", kind: "reminder", message: "x", schedule: { type: "interval", minutes: 1 } } })).status).toBe(400);
+    // Impossible dates are rejected instead of rolling over into the next month.
+    expect((await c.call("/api/automations", { method: "POST", body: { name: "x", kind: "reminder", message: "x", schedule: { type: "once", at: "2099-02-31T09:00" } } })).status).toBe(400);
+    expect(parseLocalDateTime("2099-02-30", "UTC")).toBeNull();
+    expect(parseLocalDateTime("2099-13-01", "UTC")).toBeNull();
+    expect(parseLocalDateTime("2099-01-01T24:30", "UTC")).toBeNull();
+    expect(parseLocalDateTime("2096-02-29", "UTC")).toBe("2096-02-29T23:59:00.000Z");
   });
 
   it("reconciles lost schedules after a restart", async () => {

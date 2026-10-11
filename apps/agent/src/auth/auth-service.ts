@@ -109,8 +109,22 @@ export class AuthService {
     }
   }
 
-  private recordAttempt(client: string, success: boolean): void {
-    this.db.run(`INSERT INTO tal_login_attempts (client, success, at) VALUES (?, ?, ?)`, client, success ? 1 : 0, Date.now());
+  /**
+   * Checks the limit and records the attempt as a failure in one synchronous step,
+   * before the (async) password check. Otherwise concurrent requests could all pass
+   * the check while PBKDF2 runs and bypass the limit. Returns the attempt id.
+   */
+  private beginAttempt(client: string): number {
+    this.assertLoginAllowed(client);
+    return this.db.one<{ id: number }>(
+      `INSERT INTO tal_login_attempts (client, success, at) VALUES (?, 0, ?) RETURNING id`,
+      client,
+      Date.now(),
+    )!.id;
+  }
+
+  private markAttemptSucceeded(attemptId: number): void {
+    this.db.run(`UPDATE tal_login_attempts SET success = 1 WHERE id = ?`, attemptId);
   }
 
   // ---------- Login / sessions ----------
@@ -118,10 +132,10 @@ export class AuthService {
   async login(password: string, client: string, userAgent: string): Promise<{ token: string; expiresAt: Date }> {
     this.requireConfigured();
     await this.syncSecretFingerprint();
-    this.assertLoginAllowed(client);
+    const attempt = this.beginAttempt(client);
     const ok = await verifyPassword(password, this.currentPasswordHash());
-    this.recordAttempt(client, ok);
     if (!ok) throw new AppError("UNAUTHORIZED", "Incorrect password.");
+    this.markAttemptSucceeded(attempt);
     return this.createSession(userAgent);
   }
 
@@ -184,11 +198,11 @@ export class AuthService {
   async changePassword(current: string, next: string, keepSessionId: string | null, client: string): Promise<void> {
     this.requireConfigured();
     await this.syncSecretFingerprint();
-    this.assertLoginAllowed(client);
+    const attempt = this.beginAttempt(client);
     if (!(await verifyPassword(current, this.currentPasswordHash()))) {
-      this.recordAttempt(client, false);
       throw new AppError("UNAUTHORIZED", "Current password is incorrect.");
     }
+    this.markAttemptSucceeded(attempt);
     const problem = checkPasswordStrength(next);
     if (problem) throw new ValidationError(problem);
     const hash = await hashPassword(next);
