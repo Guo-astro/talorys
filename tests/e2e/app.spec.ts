@@ -37,6 +37,8 @@ test.describe("Talorys owner experience", () => {
     await composer.fill("add task e2e approve-me");
     await page.keyboard.press("Enter");
     await expect(page.getByText('Added the task "e2e approve-me".')).toBeVisible();
+    // The reply text lands before the turn finishes; the composer ignores Enter until it does.
+    await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
     await composer.fill("delete task e2e approve-me");
     await page.keyboard.press("Enter");
     const card = page.getByRole("group", { name: "Approval needed" });
