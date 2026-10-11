@@ -19,6 +19,8 @@ export interface Manifest {
   deployment_version: string | null;
   agent_name: string;
   timezone: string;
+  /** Installer answer to "Enable semantic recall?". Missing in older manifests, read as false. */
+  semantic?: boolean;
   status: "provisioning" | "deployed" | "failed";
   /** Completed steps, used to report progress when resuming. */
   steps: string[];

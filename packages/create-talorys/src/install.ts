@@ -19,6 +19,8 @@ export interface InstallOptions {
   agentName?: string;
   /** Non-interactive password (TALORYS_OWNER_PASSWORD). Never logged. */
   password?: string;
+  /** `--semantic` / `--no-semantic`; unset asks interactively (default No). */
+  semantic?: boolean;
   /** "install" accepts new or existing directories; "update" requires an existing installation. */
   mode?: "install" | "update";
   verifyTimeoutMs?: number;
@@ -177,6 +179,18 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Manifes
         })
       : "Talorys");
 
+  // A flag always decides; otherwise resumed installs and updates keep the recorded answer.
+  const semanticDefault =
+    opts.semantic ??
+    (manifest
+      ? (manifest.semantic ?? false)
+      : ui.interactive && !opts.yes
+        ? await ui.confirm(
+            "Enable semantic recall? Finds memories by meaning using Workers AI embeddings (up to 500/day). You can change this later in Settings.",
+            false,
+          )
+        : false);
+
   const account = await chooseAccount(ui, who.accounts, manifest?.account_id ?? opts.accountId);
   wrangler.accountId = account.id;
   ui.success(`Using Cloudflare account ${account.name}`);
@@ -199,6 +213,7 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Manifes
         `Pages project  ${names.pagesProjectName}`,
         `AI             Cloudflare Workers AI (${DEFAULT_MODEL})`,
         `Storage        SQLite-backed Durable Object`,
+        `Semantic recall  ${semanticDefault ? "on" : "off"}`,
         `Plan           Works on the Workers Free plan; no paid services are enabled`,
       ].join("\n"),
       manifest ? "Update" : "Deployment plan",
@@ -221,6 +236,7 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Manifes
       deployment_version: null,
       agent_name: agentName,
       timezone,
+      semantic: semanticDefault,
       status: "provisioning",
       steps: [],
       created_at: now,
@@ -228,7 +244,7 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Manifes
     };
     writeManifest(dir, manifest);
   } else {
-    manifest = { ...manifest, status: "provisioning" };
+    manifest = { ...manifest, semantic: semanticDefault, status: "provisioning" };
     writeManifest(dir, manifest);
   }
 
@@ -243,6 +259,7 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Manifes
           version: template.version,
           timezone,
           agentName,
+          semanticDefault,
         },
         templates,
       ),

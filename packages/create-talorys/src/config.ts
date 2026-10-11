@@ -45,6 +45,8 @@ export interface AgentConfigInput {
   timezone: string;
   agentName: string;
   main?: string;
+  /** Emits TALORYS_SEMANTIC_DEFAULT "on" so the agent seeds semantic recall once on first boot. */
+  semanticDefault?: boolean;
 }
 
 /** wrangler.jsonc for the private agent Worker. */
@@ -66,6 +68,8 @@ export function generateAgentConfig(input: AgentConfigInput): Record<string, unk
       TALORYS_DEPLOYED_VERSION: input.version,
       TALORYS_DEFAULT_TIMEZONE: input.timezone,
       TALORYS_AGENT_NAME: input.agentName,
+      // Only a Yes adds a var, so a No install's config matches upstream exactly.
+      ...(input.semanticDefault ? { TALORYS_SEMANTIC_DEFAULT: "on" } : {}),
     },
     observability: { enabled: true },
   };

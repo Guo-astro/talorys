@@ -5,6 +5,8 @@ import { verifyPassword } from "@talorys/shared/crypto";
 import { allocateNames, install, resetPassword } from "../src/install";
 import { readManifest } from "../src/manifest";
 import { CliError } from "../src/errors";
+import { generateAgentConfig, toJsonc } from "../src/config";
+import { main } from "../src/cli";
 import { fakeSite, makeSandbox, makeTemplates, ScriptedUi, STRONG_PASSWORD } from "./helpers";
 
 const FAST = { verifyTimeoutMs: 2000 };
@@ -232,5 +234,116 @@ describe("password hashing interop", () => {
     const secrets = await buildOwnerSecrets(STRONG_PASSWORD, { includeSessionSecret: true });
     expect(await verifyPassword(STRONG_PASSWORD, secrets.OWNER_PASSWORD_HASH!)).toBe(true);
     expect(await verifyPassword("wrong-password-123", secrets.OWNER_PASSWORD_HASH!)).toBe(false);
+  });
+});
+
+const SEMANTIC_PROMPT = /^Enable semantic recall\?/;
+
+describe("installer: semantic prompt", () => {
+  it("asks once on a fresh install, defaulting to No", async () => {
+    const sb = makeSandbox();
+    const ui = new ScriptedUi(freshAnswers());
+    const m = await install({ dir: sb.dir, ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts.filter((p) => SEMANTIC_PROMPT.test(p))).toHaveLength(1);
+    expect(m.semantic).toBe(false);
+    expect(readManifest(sb.dir)?.semantic).toBe(false);
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).not.toContain("TALORYS_SEMANTIC_DEFAULT");
+    expect(ui.log.some((l) => l.includes("Semantic recall  off"))).toBe(true);
+  });
+
+  it("records a Yes in the manifest, the plan note and the agent config", async () => {
+    const sb = makeSandbox();
+    const ui = new ScriptedUi(["", true, STRONG_PASSWORD, STRONG_PASSWORD, true]);
+    const m = await install({ dir: sb.dir, ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts.filter((p) => SEMANTIC_PROMPT.test(p))).toHaveLength(1);
+    expect(m.semantic).toBe(true);
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).toContain(`"TALORYS_SEMANTIC_DEFAULT": "on"`);
+    expect(ui.log.some((l) => l.includes("Semantic recall  on"))).toBe(true);
+  });
+});
+
+describe("installer: semantic flags", () => {
+  it("-y leaves semantic recall off without asking", async () => {
+    const sb = makeSandbox();
+    const ui = new ScriptedUi([], false);
+    const m = await install({ dir: sb.dir, yes: true, password: STRONG_PASSWORD, ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts).toEqual([]);
+    expect(m.semantic).toBe(false);
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).not.toContain("TALORYS_SEMANTIC_DEFAULT");
+  });
+
+  it("-y --semantic turns it on without asking", async () => {
+    const sb = makeSandbox();
+    const ui = new ScriptedUi([], false);
+    const m = await install({ dir: sb.dir, yes: true, semantic: true, password: STRONG_PASSWORD, ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts).toEqual([]);
+    expect(m.semantic).toBe(true);
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).toContain(`"TALORYS_SEMANTIC_DEFAULT": "on"`);
+  });
+
+  it("--no-semantic skips the interactive question", async () => {
+    const sb = makeSandbox();
+    const ui = new ScriptedUi(freshAnswers());
+    const m = await install({ dir: sb.dir, semantic: false, ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts.some((p) => SEMANTIC_PROMPT.test(p))).toBe(false);
+    expect(m.semantic).toBe(false);
+  });
+});
+
+describe("installer: semantic update", () => {
+  it("never prompts on update and keeps the recorded value", async () => {
+    const sb = makeSandbox();
+    await install({ dir: sb.dir, yes: true, semantic: true, password: STRONG_PASSWORD, ...FAST }, { ui: new ScriptedUi([], false), wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    const ui = new ScriptedUi([true]);
+    const m = await install({ dir: sb.dir, mode: "update", ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts).toEqual(["Confirm update?"]);
+    expect(m.semantic).toBe(true);
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).toContain(`"TALORYS_SEMANTIC_DEFAULT": "on"`);
+  });
+
+  it("lets a flag on update replace the recorded value", async () => {
+    const sb = makeSandbox();
+    await install({ dir: sb.dir, yes: true, semantic: true, password: STRONG_PASSWORD, ...FAST }, { ui: new ScriptedUi([], false), wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    const ui = new ScriptedUi([true]);
+    const m = await install({ dir: sb.dir, mode: "update", semantic: false, ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts).toEqual(["Confirm update?"]);
+    expect(m.semantic).toBe(false);
+    expect(readManifest(sb.dir)?.semantic).toBe(false);
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).not.toContain("TALORYS_SEMANTIC_DEFAULT");
+  });
+
+  it("treats an older manifest without the field as off and does not ask", async () => {
+    const sb = makeSandbox();
+    await install({ dir: sb.dir, yes: true, password: STRONG_PASSWORD, ...FAST }, { ui: new ScriptedUi([], false), wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    const path = join(sb.dir, "talorys.json");
+    const { semantic: _, ...older } = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify(older));
+    const ui = new ScriptedUi([true]);
+    await install({ dir: sb.dir, mode: "update", ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(ui.prompts).toEqual(["Confirm update?"]);
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).not.toContain("TALORYS_SEMANTIC_DEFAULT");
+  });
+});
+
+describe("installer: semantic compatibility", () => {
+  it("no-semantic install writes upstream wrangler.jsonc", async () => {
+    const sb = makeSandbox();
+    const m = await install({ dir: sb.dir, yes: true, semantic: false, password: STRONG_PASSWORD, ...FAST }, { ui: new ScriptedUi([], false), wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    const upstream = toJsonc(
+      generateAgentConfig({
+        workerName: m.worker_name,
+        installationId: m.installation_id,
+        version: m.deployment_version!,
+        timezone: m.timezone,
+        agentName: m.agent_name,
+      }),
+    );
+    expect(readFileSync(join(sb.dir, "agent/wrangler.jsonc"), "utf8")).toBe(upstream);
+  });
+
+  it("rejects --semantic together with --no-semantic", async () => {
+    const sb = makeSandbox();
+    expect(await main(["--semantic", "--no-semantic", "--dir", sb.dir, "-y"])).toBe(1);
+    expect(existsSync(join(sb.dir, "talorys.json"))).toBe(false);
   });
 });
