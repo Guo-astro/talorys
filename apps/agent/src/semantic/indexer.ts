@@ -179,3 +179,17 @@ export function startBackgroundIndex(ctx: IndexerContext, waitUntil?: (promise: 
   waitUntil?.(pass);
   return pass;
 }
+
+/**
+ * Like `startBackgroundIndex`, but keeps indexing in batches until nothing is pending,
+ * the daily cap is hit, a pass embeds nothing, or a pass fails. Used after a model change.
+ */
+export function startBackgroundBackfill(ctx: IndexerContext, waitUntil?: (promise: Promise<unknown>) => void): Promise<void> {
+  const pass = (async () => {
+    let report: IndexReport;
+    do report = await runIndexer(ctx, { maxEmbed: DEFAULT_MAX_EMBED });
+    while (report.pending > 0 && report.embedded > 0 && !report.capped && !report.error);
+  })().catch((error) => console.warn("Semantic background backfill failed", error instanceof Error ? error.message : String(error)));
+  waitUntil?.(pass);
+  return pass;
+}

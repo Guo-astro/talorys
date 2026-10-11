@@ -4,6 +4,8 @@ import { invalidateSemanticCache } from "../src/semantic";
 import {
   DEFAULT_SEMANTIC_CONFIG,
   LEGACY_DEFAULT_MODEL,
+  MODEL_FLOOR_DEFAULTS,
+  floorDefaultsFor,
   SEMANTIC_CONFIG_KEY,
   deleteSemanticConfig,
   readSemanticConfig,
@@ -58,7 +60,7 @@ describe("semantic config", () => {
         enabled: true,
         model: "@cf/baai/bge-small-en-v1.5",
         maxEmbeddingsPerDay: 300,
-        vectorFloor: { absolute: 0.6, relative: 0.2, backstop: 0.4 },
+        vectorFloor: { absolute: 0.6, relative: 0.2, backstop: 0.35 },
       });
     });
   });
@@ -79,7 +81,7 @@ describe("semantic config", () => {
 
       const tuned = { ...legacy, vectorFloor: { absolute: 0.6, relative: 0.1 } };
       s.settings.setJson(SEMANTIC_CONFIG_KEY, tuned);
-      expect(readSemanticConfig(s.settings, s.db)).toEqual({ ...tuned, vectorFloor: { ...tuned.vectorFloor, backstop: 0.4 } });
+      expect(readSemanticConfig(s.settings, s.db)).toEqual({ ...tuned, vectorFloor: { ...tuned.vectorFloor, backstop: 0.35 } });
       reset(s);
     });
   });
@@ -122,6 +124,45 @@ describe("semantic config", () => {
       expect(() => writeSemanticConfig(s.settings, { vectorFloor: { backstop: 0.6 } }, s.db)).toThrow(ValidationError);
       expect(() => writeSemanticConfig(s.settings, { vectorFloor: { absolute: 0.3 } }, s.db)).toThrow(ValidationError);
       expect(readSemanticConfig(s.settings, s.db)!.vectorFloor.backstop).toBe(0.35);
+      reset(s);
+    });
+  });
+
+  it("model floor defaults follow the model unless the floors are custom", async () => {
+    const small = "@cf/baai/bge-small-en-v1.5";
+    expect(floorDefaultsFor("@cf/baai/bge-m3")).toEqual({ absolute: 0.55, relative: 0.1, backstop: 0.4 });
+    for (const m of [small, "@cf/baai/bge-base-en-v1.5", "@cf/baai/bge-large-en-v1.5"]) {
+      expect(floorDefaultsFor(m)).toEqual({ absolute: 0.5, relative: 0.1, backstop: 0.35 });
+    }
+    expect(floorDefaultsFor("@cf/qwen/qwen3-embedding-0.6b")).toEqual(MODEL_FLOOR_DEFAULTS["@cf/baai/bge-m3"]);
+    floorDefaultsFor(small).absolute = 0.9;
+    expect(floorDefaultsFor(small).absolute).toBe(0.5);
+
+    await inAgent((agent) => {
+      const s = agent.services;
+      reset(s);
+      writeSemanticConfig(s.settings, { enabled: true }, s.db);
+      expect(writeSemanticConfig(s.settings, { model: small }, s.db).vectorFloor).toEqual({ absolute: 0.5, relative: 0.1, backstop: 0.35 });
+      expect(readSemanticConfig(s.settings, s.db)!.vectorFloor).toEqual({ absolute: 0.5, relative: 0.1, backstop: 0.35 });
+      expect(writeSemanticConfig(s.settings, { model: small }, s.db).vectorFloor).toEqual(floorDefaultsFor(small));
+      expect(writeSemanticConfig(s.settings, { model: "@cf/baai/bge-m3" }, s.db).vectorFloor).toEqual(DEFAULT_SEMANTIC_CONFIG.vectorFloor);
+
+      writeSemanticConfig(s.settings, { vectorFloor: { absolute: 0.6 } }, s.db);
+      expect(writeSemanticConfig(s.settings, { model: small }, s.db).vectorFloor).toEqual({ absolute: 0.6, relative: 0.1, backstop: 0.4 });
+      expect(writeSemanticConfig(s.settings, { model: "@cf/baai/bge-m3", vectorFloor: { absolute: 0.7 } }, s.db).vectorFloor.absolute).toBe(0.7);
+
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, { enabled: true, model: small, vectorFloor: { absolute: 0.6, relative: 0.1 } });
+      expect(readSemanticConfig(s.settings, s.db)!.vectorFloor).toEqual({ absolute: 0.6, relative: 0.1, backstop: 0.35 });
+      reset(s);
+    });
+  });
+
+  it("an invalid stored model reads as the default model, keeping the other fields", async () => {
+    await inAgent((agent) => {
+      const s = agent.services;
+      reset(s);
+      s.settings.setJson(SEMANTIC_CONFIG_KEY, { enabled: true, model: "bge-small", maxEmbeddingsPerDay: 300 });
+      expect(readSemanticConfig(s.settings, s.db)).toEqual({ ...DEFAULT_SEMANTIC_CONFIG, enabled: true, maxEmbeddingsPerDay: 300 });
       reset(s);
     });
   });
@@ -192,10 +233,13 @@ describe("semantic config", () => {
       ever_enabled: true,
     });
 
-    for (const bad of [{ enabled: "yes" }, { vectorFloor: { absolute: 2 } }, { vectorFloor: { backstop: 0.9 } }, { model: "" }, { maxEmbeddingsPerDay: 1.5 }]) {
+    const bads = [{ enabled: "yes" }, { vectorFloor: { absolute: 2 } }, { vectorFloor: { backstop: 0.9 } }, { model: "" }, { model: "bge-small" }, { maxEmbeddingsPerDay: 1.5 }];
+    for (const bad of bads) {
       const r = await c.call("/api/semantic/config", { method: "PUT", body: bad });
       expect(r.status).toBe(400);
     }
+    const small = await c.json("/api/semantic/config", { method: "PUT", body: { model: " @cf/baai/bge-small-en-v1.5 " } });
+    expect(small.config).toMatchObject({ model: "@cf/baai/bge-small-en-v1.5", vectorFloor: { absolute: 0.5, relative: 0.1, backstop: 0.35 } });
     await inAgent((agent) => reset(agent.services));
   });
 });

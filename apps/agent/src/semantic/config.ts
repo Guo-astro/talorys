@@ -9,7 +9,12 @@ export const SEMANTIC_CONFIG_KEY = "semantic.recall";
 
 export const semanticConfigSchema = z.object({
   enabled: z.boolean(),
-  model: z.string().trim().min(1).max(200),
+  model: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .regex(/^@(cf|hf)\/[\w.\-/]+$/, "Must be a Workers AI model id"),
   maxEmbeddingsPerDay: z.number().int().min(0).max(10_000),
   vectorFloor: z.object({
     absolute: z.number().min(0).max(1),
@@ -21,11 +26,32 @@ export const semanticConfigSchema = z.object({
 
 export type SemanticConfig = z.infer<typeof semanticConfigSchema>;
 
+type VectorFloor = SemanticConfig["vectorFloor"];
+
+const BGE_M3_FLOOR: VectorFloor = { absolute: 0.55, relative: 0.1, backstop: 0.4 };
+const BGE_EN_FLOOR: VectorFloor = { absolute: 0.5, relative: 0.1, backstop: 0.35 };
+
+/** Floor defaults per embedding model; the English bge models score higher cosines than bge-m3. */
+export const MODEL_FLOOR_DEFAULTS: Record<string, VectorFloor> = {
+  "@cf/baai/bge-m3": BGE_M3_FLOOR,
+  "@cf/baai/bge-small-en-v1.5": BGE_EN_FLOOR,
+  "@cf/baai/bge-base-en-v1.5": BGE_EN_FLOOR,
+  "@cf/baai/bge-large-en-v1.5": BGE_EN_FLOOR,
+};
+
+/** A copy of the model's floor defaults; unknown models get the bge-m3 values. */
+export function floorDefaultsFor(model: string): VectorFloor {
+  return { ...(MODEL_FLOOR_DEFAULTS[model] ?? BGE_M3_FLOOR) };
+}
+
+const sameFloor = (a: VectorFloor, b: VectorFloor) =>
+  a.absolute === b.absolute && a.relative === b.relative && a.backstop === b.backstop;
+
 export const DEFAULT_SEMANTIC_CONFIG: SemanticConfig = {
   enabled: false,
   model: "@cf/baai/bge-m3",
   maxEmbeddingsPerDay: 500,
-  vectorFloor: { absolute: 0.55, relative: 0.1, backstop: 0.4 },
+  vectorFloor: floorDefaultsFor("@cf/baai/bge-m3"),
 };
 
 /** The default model before bge-m3. Stored with its untouched 0.5/0.1 floors, it reads as the new defaults. */
@@ -66,7 +92,8 @@ const defined = <T extends object>(obj: T): Partial<T> =>
  * when it is a boolean. Pass `db` to tell an unparseable stored value from an absent key.
  * A stored untouched legacy default (bge-small with floors 0.5/0.1) reads with the current
  * default model and floors; the stored value itself is never rewritten. A stored floor without
- * `backstop` gets the default one, lowered to `absolute` when that is below it.
+ * `backstop` gets the stored model's default one, lowered to `absolute` when that is below it,
+ * and an invalid stored model reads as the default model.
  */
 export function readSemanticConfig(settings: SettingsService, db?: Database): SemanticConfig | null {
   const stored = settings.getJson<unknown>(SEMANTIC_CONFIG_KEY);
@@ -80,12 +107,15 @@ export function readSemanticConfig(settings: SettingsService, db?: Database): Se
     ? { ...raw, model: DEFAULT_SEMANTIC_CONFIG.model, vectorFloor: { ...DEFAULT_SEMANTIC_CONFIG.vectorFloor } }
     : raw;
   const enabled = typeof partial.enabled === "boolean" ? partial.enabled : false;
+  const parsedModel = semanticConfigSchema.shape.model.safeParse(partial.model);
+  const model = parsedModel.success ? parsedModel.data : DEFAULT_SEMANTIC_CONFIG.model;
   const floor = partial.vectorFloor;
   const parsed = semanticConfigSchema.safeParse({
     ...DEFAULT_SEMANTIC_CONFIG,
     ...partial,
+    model,
     vectorFloor: {
-      ...DEFAULT_SEMANTIC_CONFIG.vectorFloor,
+      ...floorDefaultsFor(model),
       ...(floor && typeof floor === "object" && !Array.isArray(floor) ? floor : {}),
     },
   });
@@ -100,16 +130,25 @@ export function readSemanticConfig(settings: SettingsService, db?: Database): Se
   return parsed.data;
 }
 
-/** The config a patch would produce, without storing it. Throws ValidationError on invalid values. */
+/**
+ * The config a patch would produce, without storing it. Throws ValidationError on invalid values.
+ * A model change without `vectorFloor` moves default floors to the new model's defaults;
+ * custom floors are kept.
+ */
 export function mergeSemanticConfig(current: SemanticConfig | null, patch: SemanticConfigPatch): SemanticConfig {
   const parsedPatch = semanticConfigPatchSchema.safeParse(patch);
   if (!parsedPatch.success) throw ValidationError.fromZod(parsedPatch.error);
   const base = current ?? defaults();
   const { vectorFloor, ...rest } = parsedPatch.data;
+  const resetFloor =
+    vectorFloor === undefined &&
+    rest.model !== undefined &&
+    rest.model !== base.model &&
+    sameFloor(base.vectorFloor, floorDefaultsFor(base.model));
   const parsed = semanticConfigSchema.safeParse({
     ...base,
     ...defined(rest),
-    vectorFloor: { ...base.vectorFloor, ...defined(vectorFloor ?? {}) },
+    vectorFloor: resetFloor ? floorDefaultsFor(rest.model!) : { ...base.vectorFloor, ...defined(vectorFloor ?? {}) },
   });
   if (!parsed.success) throw ValidationError.fromZod(parsed.error);
   const { absolute, backstop } = parsed.data.vectorFloor;

@@ -4,7 +4,14 @@ import { MockEmbedder, embeddingsToday } from "../src/semantic/embeddings";
 import { runIndexer } from "../src/semantic/indexer";
 import { UsageService } from "../src/services/usage";
 import { invalidateSemanticCache } from "../src/semantic";
-import { DEFAULT_SEMANTIC_CONFIG, SEMANTIC_CONFIG_KEY, deleteSemanticConfig, readSemanticConfig } from "../src/semantic/config";
+import {
+  DEFAULT_SEMANTIC_CONFIG,
+  SEMANTIC_CONFIG_KEY,
+  type SemanticConfigPatch,
+  deleteSemanticConfig,
+  readSemanticConfig,
+  writeSemanticConfig,
+} from "../src/semantic/config";
 import { dropSemanticData, semanticTableNames } from "../src/semantic/migrations";
 import type { Services } from "../src/services/container";
 
@@ -12,6 +19,40 @@ function reset(s: Services) {
   dropSemanticData(s.db);
   deleteSemanticConfig(s.settings);
   invalidateSemanticCache(s);
+}
+
+/** Turns the feature on without the PUT route, so no background backfill starts. */
+async function enableQuietly(patch: SemanticConfigPatch = {}) {
+  await inAgent((agent) => {
+    const s = agent.services;
+    writeSemanticConfig(s.settings, { enabled: true, ...patch }, s.db);
+    invalidateSemanticCache(s);
+  });
+}
+
+type Status = { vectors: number; pending: number; embeddings_today: number };
+
+/** Polls the status until three reads in a row agree, i.e. background indexing has stopped. */
+async function settledStatus(c: Awaited<ReturnType<typeof loggedIn>>): Promise<Status> {
+  let last = (await c.json("/api/semantic/status")) as Status;
+  let same = 0;
+  for (let i = 0; i < 200; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    const next = (await c.json("/api/semantic/status")) as Status;
+    same = next.vectors === last.vectors && next.embeddings_today === last.embeddings_today ? same + 1 : 0;
+    if (same === 2) return next;
+    last = next;
+  }
+  throw new Error("background indexing did not settle");
+}
+
+/** Gives every memory a vector of another model, so all of them are pending for the mock embedder. */
+function staleVectors(s: Services) {
+  s.db.run(
+    `INSERT INTO tal_semantic_vectors (memory_id, model, dims, content_hash, vector, updated_at)
+     SELECT id, ?, 384, 'stale', '', ? FROM tal_memories`,
+    "@cf/baai/bge-small-en-v1.5", new Date().toISOString(),
+  );
 }
 
 describe("semantic routes", () => {
@@ -57,8 +98,7 @@ describe("semantic routes", () => {
   it("status reports the schema and pending memories once enabled", async () => {
     await inAgent((agent) => reset(agent.services));
     const c = await loggedIn();
-    const put = await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true, maxEmbeddingsPerDay: 42 } });
-    expect(put.status).toBe(200);
+    await enableQuietly({ maxEmbeddingsPerDay: 42 });
     const count = await inAgent((agent) => agent.services.memories.count());
     expect(count).toBeGreaterThan(0);
     expect(await c.json("/api/semantic/status")).toEqual({
@@ -152,7 +192,7 @@ describe("semantic routes", () => {
     });
     const c = await loggedIn();
     const { memory } = await c.json("/api/memories", { method: "POST", body: { content: "Drives a Tesla Model 3", category: "fact" } });
-    await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true } });
+    await enableQuietly();
 
     const reindex = await c.call("/api/semantic/reindex", { method: "POST" });
     expect(reindex.status).toBe(200);
@@ -232,7 +272,7 @@ describe("semantic routes", () => {
     });
     const c = await loggedIn();
     // `reset` dropped the usage table, so today's count starts at zero.
-    await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true, maxEmbeddingsPerDay: 1 } });
+    await enableQuietly({ maxEmbeddingsPerDay: 1 });
 
     expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 50, pending: 10, capped: true });
     const search = await c.call("/api/semantic/search?q=kayak");
@@ -242,6 +282,54 @@ describe("semantic routes", () => {
     expect(hits.every((h) => h.cosine === null)).toBe(true);
     await inAgent((agent) => {
       expect(embeddingsToday(agent.services.db, UsageService.day())).toBe(1);
+      reset(agent.services);
+      agent.services.memories.clear();
+    });
+  });
+
+  it("a model change re-embeds every memory in the background, up to the daily cap", async () => {
+    await inAgent((agent) => {
+      reset(agent.services);
+      agent.services.memories.clear();
+      for (let i = 0; i < 120; i++) agent.services.memories.create({ content: `Kayak trip number ${i}` });
+    });
+    await enableQuietly({ maxEmbeddingsPerDay: 10_000 });
+    await inAgent((agent) => staleVectors(agent.services));
+    const c = await loggedIn();
+    expect(await c.json("/api/semantic/status")).toMatchObject({ vectors: 0, pending: 120 });
+
+    const put = await c.call("/api/semantic/config", { method: "PUT", body: { model: "@cf/baai/bge-small-en-v1.5" } });
+    expect(put.status).toBe(200);
+    expect(await settledStatus(c)).toMatchObject({ vectors: 120, pending: 0, embeddings_today: 3 });
+
+    // The same model again starts no indexing.
+    await inAgent((agent) => {
+      agent.services.db.run(`DELETE FROM tal_semantic_vectors`);
+      staleVectors(agent.services);
+    });
+    await c.call("/api/semantic/config", { method: "PUT", body: { model: "@cf/baai/bge-small-en-v1.5" } });
+    expect(await settledStatus(c)).toMatchObject({ vectors: 0, pending: 120, embeddings_today: 3 });
+
+    // The cap stops the backfill; the rest stays pending.
+    await c.call("/api/semantic/config", { method: "PUT", body: { maxEmbeddingsPerDay: 4 } });
+    await c.call("/api/semantic/config", { method: "PUT", body: { model: "@cf/baai/bge-m3" } });
+    expect(await settledStatus(c)).toMatchObject({ vectors: 50, pending: 70, embeddings_today: 4 });
+    await inAgent((agent) => {
+      reset(agent.services);
+      agent.services.memories.clear();
+    });
+  });
+
+  it("turning the feature on embeds every pending memory in the background", async () => {
+    await inAgent((agent) => {
+      reset(agent.services);
+      agent.services.memories.clear();
+      for (let i = 0; i < 60; i++) agent.services.memories.create({ content: `Kayak trip number ${i}` });
+    });
+    const c = await loggedIn();
+    await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true } });
+    expect(await settledStatus(c)).toMatchObject({ vectors: 60, pending: 0, embeddings_today: 2 });
+    await inAgent((agent) => {
       reset(agent.services);
       agent.services.memories.clear();
     });

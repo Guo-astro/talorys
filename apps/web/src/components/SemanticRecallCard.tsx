@@ -67,6 +67,9 @@ export function SemanticRecallCard() {
   const savedCap = config.data?.config?.maxEmbeddingsPerDay ?? DEFAULT_CAP;
   const [cap, setCap] = useState(savedCap);
   useEffect(() => setCap(savedCap), [savedCap]);
+  const savedModel = config.data?.config?.model ?? "";
+  const [model, setModel] = useState(savedModel);
+  useEffect(() => setModel(savedModel), [savedModel]);
 
   const saveConfig = useApiMutation((patch: Partial<SemanticConfig>) => api<{ config: SemanticConfig }>("/semantic/config", { method: "PUT", body: patch }), {
     success: (r) => (r.config.enabled ? "Semantic recall settings saved" : "Semantic recall turned off"),
@@ -135,6 +138,20 @@ export function SemanticRecallCard() {
                   ))}
                 </div>
               )}
+              <Row label="Embedding model" hint="Default: @cf/baai/bge-m3. Must be a Workers AI text embedding model.">
+                <form
+                  className="flex gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (model.trim() !== savedModel) saveConfig.mutate({ model: model.trim() });
+                  }}
+                >
+                  <Input value={model} onChange={(e) => setModel(e.target.value)} aria-label="Embedding model id" className="font-mono text-xs" />
+                  <Button type="submit" variant="outline" disabled={!model.trim() || model.trim() === savedModel}>
+                    Save
+                  </Button>
+                </form>
+              </Row>
               <Row label="Max embeddings per day" hint="Separate from the AI request cap. Recall falls back to keywords when spent.">
                 <form
                   className="flex gap-2"

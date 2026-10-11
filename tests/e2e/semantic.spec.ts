@@ -35,6 +35,25 @@ test.describe("Semantic recall", () => {
     await expect(status).toContainText("Embeddings today");
     await expect(page.locator('[data-stat="Pending"]')).toHaveText("0", { timeout: 20_000 });
 
+    const modelInput = page.getByLabel("Embedding model id");
+    const saveModel = page.locator("form").filter({ has: modelInput }).getByRole("button", { name: "Save" });
+    await expect(modelInput).toHaveValue("@cf/baai/bge-m3");
+    await modelInput.fill("bge-small");
+    await saveModel.click();
+    await expect(page.getByText("Must be a Workers AI model id").first()).toBeVisible();
+    await page.reload();
+    await page.getByRole("tab", { name: "AI" }).click();
+    await expect(modelInput).toHaveValue("@cf/baai/bge-m3");
+    for (const model of ["@cf/baai/bge-small-en-v1.5", "@cf/baai/bge-m3"]) {
+      await modelInput.fill(model);
+      await saveModel.click();
+      await expect(saveModel).toBeDisabled();
+      await page.reload();
+    await page.getByRole("tab", { name: "AI" }).click();
+      await expect(modelInput).toHaveValue(model);
+    }
+    await expect(page.locator('[data-stat="Pending"]')).toHaveText("0", { timeout: 20_000 });
+
     await page.getByRole("link", { name: "Memory" }).first().click();
     await page.getByRole("button", { name: "Add memory" }).click();
     await page.getByLabel("What should Talorys remember?").fill(content);

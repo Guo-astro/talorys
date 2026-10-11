@@ -3,7 +3,7 @@ import { inAgent, loggedIn } from "./helpers";
 import { invalidateSemanticCache } from "../src/semantic";
 import { DEFAULT_SEMANTIC_CONFIG, type SemanticConfig, deleteSemanticConfig } from "../src/semantic/config";
 import { EMBEDDING_DIMS, MockEmbedder, contentHash, decodeVector, embeddingText, embeddingsToday } from "../src/semantic/embeddings";
-import { type IndexerContext, pendingMemories, runIndexer } from "../src/semantic/indexer";
+import { type IndexerContext, pendingMemories, runIndexer, startBackgroundBackfill } from "../src/semantic/indexer";
 import { dropSemanticData, semanticTableNames } from "../src/semantic/migrations";
 import { UsageService } from "../src/services/usage";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
@@ -119,6 +119,30 @@ describe("semantic indexer", () => {
 
       const zero = await runIndexer({ ...ctx, config: { ...ctx.config, maxEmbeddingsPerDay: 0 } });
       expect(zero).toMatchObject({ embedded: 0, capped: true });
+    });
+  });
+
+  it("a background backfill embeds in batches until nothing is pending or the cap is hit", async () => {
+    await inAgent(async (a) => {
+      const ids = Array.from({ length: 120 }, (_, i) => a.services.memories.create({ content: `Kayak trip number ${i}` }).id);
+      const total = a.services.memories.count();
+      const { ctx, embed } = context(a);
+      const handed: Promise<unknown>[] = [];
+      await startBackgroundBackfill(ctx, (p) => handed.push(p));
+      expect(handed).toHaveLength(1);
+      expect(embed).toHaveBeenCalledTimes(Math.ceil(total / 50));
+      expect(await pendingMemories(a.services.db, ctx.embedder!.model)).toHaveLength(0);
+
+      const capped = context(a, { maxEmbeddingsPerDay: 2 });
+      await startBackgroundBackfill(capped.ctx);
+      expect(capped.embed).toHaveBeenCalledTimes(2);
+      expect(await pendingMemories(a.services.db, capped.ctx.embedder!.model)).toHaveLength(total - 100);
+
+      const failing = context(a);
+      failing.embed.mockRejectedValue(new Error("boom"));
+      await expect(startBackgroundBackfill(failing.ctx)).resolves.toBeUndefined();
+      expect(failing.embed).toHaveBeenCalledTimes(1);
+      for (const id of ids) a.services.memories.delete(id);
     });
   });
 

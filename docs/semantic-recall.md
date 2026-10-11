@@ -20,7 +20,7 @@ Worker var `TALORYS_SEMANTIC_DEFAULT=on`, and the agent enables the feature once
 on first boot. After that, Settings is the source of truth.
 
 Enabling creates the module's tables. Existing memories are embedded in the
-background and before each chat turn, 50 at a time.
+background in batches of 50 until done or capped, and before each chat turn.
 
 The config is stored in `tal_settings` under the key `semantic.recall`.
 Defaults come from `DEFAULT_SEMANTIC_CONFIG` in
@@ -29,21 +29,49 @@ Defaults come from `DEFAULT_SEMANTIC_CONFIG` in
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Module on or off |
-| `model` | `@cf/baai/bge-m3` | Workers AI embedding model (1024 dimensions) |
+| `model` | `@cf/baai/bge-m3` | Workers AI embedding model (1024 dimensions); editable in the card |
 | `maxEmbeddingsPerDay` | `500` | Daily embedding cap (0 to 10,000) |
 | `vectorFloor.absolute` | `0.55` | Minimum cosine score for a vector hit |
 | `vectorFloor.relative` | `0.1` | A vector hit must also be within this of the best hit |
 | `vectorFloor.backstop` | `0.4` | Minimum cosine for a top-k fallback hit; never above `vectorFloor.absolute` |
+
+The floor defaults shown are bge-m3's; other models have their own (see below).
 
 Turning it off keeps the vectors, so turning it back on only embeds what
 changed in the meantime.
 
 ### Changing the embedding model
 
+Change it in the card's **Embedding model** field (or `PUT /api/semantic/config`
+with `model`). The id must look like a Workers AI model id (`@cf/...` or
+`@hf/...`, the same rule as the chat model) and should name a text embedding
+model; anything else is rejected with a validation error. An unknown but valid
+id is accepted and its vector size is learned from the first response.
+
+Each model has its own floor defaults, because the English bge models score
+higher cosines than bge-m3 (bge-small: correct hits about 0.55 to 0.70, noise up
+to about 0.55):
+
+| Model | `absolute` | `relative` | `backstop` | Newer-duplicate pull-in |
+| --- | --- | --- | --- | --- |
+| `@cf/baai/bge-m3` | 0.55 | 0.10 | 0.40 | 0.57 |
+| `@cf/baai/bge-small-en-v1.5`, `bge-base-en-v1.5`, `bge-large-en-v1.5` | 0.50 | 0.10 | 0.35 | 0.70 |
+| Any other model | 0.55 | 0.10 | 0.40 | 0.70 |
+
+Saving a different model moves the floors to the new model's defaults when the
+stored floors are still the old model's defaults. Custom floors are kept as they
+are. A floor field missing from the stored config is filled from the stored
+model's defaults.
+
 Vectors are stored per model. Recall only compares vectors of the configured
-model and its size, so changing `model` never mixes old and new vectors: every
-memory is re-embedded for the new model, lazily on the next chat turns or all at
-once with **Reindex**, and keyword search covers the gap meanwhile. A stored
+model and its size, so changing `model` never mixes old and new vectors: the old
+vectors are ignored and keyword search covers the gap meanwhile. Saving a new
+model while the feature is on, or turning the feature on, starts a background
+re-embed that runs in batches of 50 until nothing is pending or the daily cap is
+reached; the card's Pending count goes down as it runs. A large store may hit the
+cap first; the rest is embedded by later chat turns, the next day, or
+**Reindex**. Saving the same model again starts nothing, and a model change
+while the feature is off is stored and embedded when it is turned on. A stored
 config that is still the untouched old default (`@cf/baai/bge-small-en-v1.5`
 with floors 0.5 and 0.1) reads as the bge-m3 defaults, so such an instance moves
 to bge-m3 without a Settings change. An owner who picks bge-small and sets those

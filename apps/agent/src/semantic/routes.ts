@@ -14,7 +14,15 @@ import {
 } from "./config";
 import { MockEmbedder, createEmbedder, embeddingsToday } from "./embeddings";
 import { cachedSemanticConfig, invalidateSemanticCache } from "./index";
-import { type IndexReport, pendingMemories, purgeAllVectors, purgeVector, runIndexer, startBackgroundIndex } from "./indexer";
+import {
+  type IndexReport,
+  pendingMemories,
+  purgeAllVectors,
+  purgeVector,
+  runIndexer,
+  startBackgroundBackfill,
+  startBackgroundIndex,
+} from "./indexer";
 import { dropSemanticData, ensureSemanticSchema, semanticSchema } from "./migrations";
 import { LAZY_INDEX_BATCH, createSemanticContext, hybridSearch, savedAt } from "./recall";
 
@@ -103,8 +111,17 @@ semanticRoutes.get("/semantic/config", (c) => {
 semanticRoutes.put("/semantic/config", async (c) => {
   const patch = await body(c, semanticConfigPatchSchema);
   const s = c.env.agent.services;
+  const previous = cachedSemanticConfig(s);
   const config = writeSemanticConfig(s.settings, patch, s.db);
   invalidateSemanticCache(s);
+  // A new model (or turning the feature on) leaves every memory pending; embed them in the background.
+  if (config.enabled && (config.model !== previous?.model || !previous?.enabled)) {
+    try {
+      void startBackgroundBackfill(createSemanticContext(s, c.env.env, config), waitUntilOf(c));
+    } catch (error) {
+      console.warn("Semantic backfill trigger failed", error instanceof Error ? error.message : String(error));
+    }
+  }
   return c.json({ config });
 });
 
