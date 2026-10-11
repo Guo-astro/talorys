@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { type Exec, type ExecOptions, type ExecResult, exec as defaultExec } from "./exec";
-import { CliError, explainWranglerFailure } from "./errors";
+import { CliError, explainWranglerFailure, sanitize } from "./errors";
 
 export interface CloudflareAccount {
   id: string;
@@ -90,10 +90,7 @@ export class Wrangler {
 
   async version(): Promise<string> {
     const r = await this.run(["--version"], { timeoutMs: 60_000 });
-    if (r.code !== 0) {
-      const detail = r.stderr.trim().split("\n").slice(-3).join("\n");
-      throw new CliError(`The bundled Wrangler CLI could not start.${detail ? `\n${detail}` : ""}`, "Reinstall with `npx create-talorys@latest`.");
-    }
+    if (r.code !== 0) throw new CliError("The bundled Wrangler CLI could not start.", "Reinstall with `npx create-talorys@latest`.", sanitize(r.stderr, 3));
     return r.stdout.trim().split("\n").pop()!.trim();
   }
 
