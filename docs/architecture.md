@@ -44,6 +44,28 @@
 - **Agent turns**: `agent/runner.ts` builds context (system prompt, relevant
   memories, running summary, recent history within the token budget), calls the
   provider with tools, streams events, persists the result and records usage.
+  Memories come from keyword recall (`agent/memory.ts`) or, when enabled,
+  semantic recall (`semantic/`), then are labelled current / unsure / past and
+  kept within a token budget of 20% of the context limit (max 1,500 tokens).
+
+## Memory history
+
+`apps/agent/src/memory/` — see [memory-history.md](memory-history.md) for the
+user-facing description.
+
+| Module | Responsibility |
+| --- | --- |
+| `conflict.ts` | Deterministic relationship rules; optional, validated AI double-check |
+| `lifecycle.ts` | Supersede / status changes / history / review resolution; cycle prevention; stated-date extraction |
+| `intent.ts` | Detects questions about the past |
+| `service.ts` | `MemoryHistoryService`: write paths, conflict pipeline, complete deletion (incl. semantic vectors), prompt labels |
+
+Write paths (`POST/PATCH /api/memories`, `/correct`, the `remember` and
+`update_memory` tools) save the memory first, then run conflict detection. It
+never runs per chat message and uses no AI unless the owner enables the
+double-check. Both recall paths leave past (`historical`) memories out unless
+the question is about the past; then earlier versions of the recalled facts are
+added.
 
 ## AI provider abstraction
 
@@ -75,7 +97,9 @@ shell, code execution, network or credentials.
 `tal_settings`, `tal_conversations`, `tal_messages`, `tal_memories`,
 `tal_projects`, `tal_tasks`, `tal_notes`, `tal_automations`,
 `tal_automation_runs`, `tal_notifications`, `tal_activity`, `tal_sessions`,
-`tal_login_attempts`, `tal_usage_daily`, plus FTS tables.
+`tal_login_attempts`, `tal_usage_daily`, `tal_memory_reviews`, plus FTS tables. Migration 3 added `tal_messages.source` (chat or import); migration 4 added memory lifecycle
+columns (`status`, `superseded_by`, `valid_from`, `valid_until`) and the
+`tal_memory_reviews` table; existing memories default to `active`.
 
 ## Free-tier choices
 

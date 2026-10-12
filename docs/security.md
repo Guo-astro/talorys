@@ -75,7 +75,8 @@ does on its own:
 
 - New automations arrive paused, and existing ones are never rewritten or
   re-enabled (a backup may only pause them).
-- The model, limits, demo mode and auto-memory settings are not imported.
+- The model, limits, demo mode, auto-memory and memory history settings are
+  not imported.
 - Conversation summaries are dropped; they feed the system prompt but are
   invisible in the UI. They are regenerated from the visible messages.
 - Imported messages are marked as imported. Retry refuses them, and recorded

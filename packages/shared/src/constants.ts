@@ -29,6 +29,12 @@ export const DEFAULT_LIMITS = {
   maxAiRequestsPerDay: 200,
 } as const;
 
+/** Memory history defaults: rule-based conflict detection on, AI double-check off. */
+export const DEFAULT_MEMORY_HISTORY = {
+  conflictReview: true,
+  aiConflictCheck: false,
+} as const;
+
 /** Hard ceilings the owner cannot exceed through settings. */
 export const LIMIT_CEILINGS = {
   maxOutputTokens: 4096,

@@ -104,6 +104,36 @@ test.describe("Talorys owner experience", () => {
     await expect(page.getByText("Enjoys e2e jazz on Sundays")).toHaveCount(0);
   });
 
+  test("memory history keeps replaced facts as past and asks about unclear conflicts", async ({ page }) => {
+    await login(page);
+    await page.getByRole("link", { name: "Memory" }).first().click();
+    const add = async (content: string) => {
+      await page.getByRole("button", { name: "Add memory" }).click();
+      await page.getByLabel("What should Talorys remember?").fill(content);
+      await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+    };
+    await add("I own a Volkswagen history-e2e");
+    await add("I sold my Volkswagen history-e2e and bought a Tesla");
+    await page.getByRole("tab", { name: /Historical/ }).click();
+    const old = page.getByRole("listitem").filter({ hasText: "I own a Volkswagen history-e2e" });
+    await expect(old.getByText("Past")).toBeVisible();
+    await old.getByRole("button", { name: "Replaced by a newer memory" }).click();
+    const history = page.getByRole("dialog");
+    await expect(history).toContainText("Current");
+    await expect(history).toContainText("I sold my Volkswagen history-e2e and bought a Tesla");
+    await expect(history).toContainText("Previously");
+    await history.getByRole("button", { name: "Close" }).click();
+
+    await page.getByRole("tab", { name: /All/ }).click();
+    await add("I live in Lima history-e2e");
+    await add("I live in Quito history-e2e");
+    const conflicts = page.getByRole("region", { name: "Possible conflicts" });
+    await expect(conflicts).toContainText("I live in Lima history-e2e");
+    await conflicts.getByRole("button", { name: "Keep both" }).click();
+    await expect(conflicts).toHaveCount(0);
+  });
+
   test("notes support Markdown editing and search", async ({ page }) => {
     await login(page);
     await page.getByRole("link", { name: "Notes" }).first().click();

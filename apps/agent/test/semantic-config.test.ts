@@ -302,10 +302,15 @@ async function compareRunners(s: Services, ext: ReturnType<typeof semanticExtens
 }
 
 async function memoriesEqualUpstream() {
-  const expected = await inAgent((agent) => ({ memories: agent.services.memories.list({}), total: agent.services.memories.count() }));
+  const counts = (m: Services["memories"]) => ({ active: m.count("active"), historical: m.count("historical"), review: m.count("review") });
+  const expected = await inAgent((agent) => ({ memories: agent.services.memories.list({}), total: agent.services.memories.count(), counts: counts(agent.services.memories) }));
   const c = await loggedIn();
   expect(await c.json("/api/memories")).toEqual(expected);
-  const q = await inAgent((agent) => ({ memories: agent.services.memories.list({ q: "tea" }), total: agent.services.memories.count() }));
+  const q = await inAgent((agent) => ({
+    memories: agent.services.memories.list({ q: "tea" }),
+    total: agent.services.memories.count(),
+    counts: counts(agent.services.memories),
+  }));
   expect(await c.json("/api/memories?q=tea")).toEqual(q);
 }
 

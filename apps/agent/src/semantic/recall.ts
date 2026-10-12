@@ -8,6 +8,7 @@ import { MODEL_DIMS, createEmbedder, embeddingsToday, recordEmbeddings } from ".
 import { type IndexerContext, runIndexer } from "./indexer";
 import { ensureSemanticSchema } from "./migrations";
 import { cachedVectors, dot, normalize } from "./vectorStore";
+import { hasHistoricalIntent } from "../memory/intent";
 
 /** Mirrors the private upstream limits in `selectRelevantMemories` (agent/memory.ts). */
 export const MAX_RELEVANT_MEMORIES = 8;
@@ -107,12 +108,16 @@ export const FALLBACK_K = 4;
  * backstop (ties to the newer update, then the lower id), each keeping its real cosine. Rows of
  * another model or size are never scored.
  */
-function scanVectors(ctx: SemanticContext, model: string, query: Float32Array): { id: string; cosine: number }[] {
+function scanVectors(ctx: SemanticContext, model: string, query: Float32Array, includeHistorical: boolean): { id: string; cosine: number }[] {
   const { absolute, relative, backstop } = ctx.config.vectorFloor;
   const unit = normalize(query);
-  const updated = new Map(ctx.db.all<{ id: string; updated_at: string }>(`SELECT id, updated_at FROM tal_memories`).map((r) => [r.id, r.updated_at]));
+  const rows = ctx.db.all<{ id: string; updated_at: string; status: string }>(`SELECT id, updated_at, status FROM tal_memories`);
+  const updated = new Map(rows.map((r) => [r.id, r.updated_at]));
+  // Past facts (memory history) are only scored for questions about the past.
+  const past = includeHistorical ? new Set<string>() : new Set(rows.filter((r) => r.status === "historical").map((r) => r.id));
   const all: { id: string; cosine: number; updated: string | null }[] = [];
   for (const [id, vector] of cachedVectors(ctx.db, model, query.length)) {
+    if (past.has(id)) continue;
     all.push({ id, cosine: dot(unit, vector), updated: updated.get(id) ?? null });
   }
   all.sort((a, b) => b.cosine - a.cosine || compareDesc(a.updated ?? "", b.updated ?? "") || compareAsc(a.id, b.id));
@@ -135,11 +140,12 @@ function scanVectors(ctx: SemanticContext, model: string, query: Float32Array): 
  * Without a query vector (no embedder, cap reached, AI error) the keyword list alone ranks.
  * Ties go to the higher cosine, then the newer update, then the lower id.
  */
-export async function hybridSearch(ctx: SemanticContext, query: string, opts: { limit: number }): Promise<RecallHit[]> {
+export async function hybridSearch(ctx: SemanticContext, query: string, opts: { limit: number; includeHistorical?: boolean }): Promise<RecallHit[]> {
   ensureSemanticSchema(ctx.db);
+  const includeHistorical = opts.includeHistorical ?? hasHistoricalIntent(query);
   const queryVector = await embedQuery(ctx, query);
-  const vectorHits = queryVector && ctx.embedder ? scanVectors(ctx, ctx.embedder.model, queryVector) : [];
-  const keywordHits = ctx.services.memories.search(query, CANDIDATES_PER_LIST);
+  const vectorHits = queryVector && ctx.embedder ? scanVectors(ctx, ctx.embedder.model, queryVector, includeHistorical) : [];
+  const keywordHits = ctx.services.memories.search(query, CANDIDATES_PER_LIST, undefined, includeHistorical ? "all" : "current");
 
   const fused = rrf([vectorHits.map((h) => h.id), keywordHits.map((m) => m.id)]);
   const cosines = new Map(vectorHits.map((h) => [h.id, h.cosine]));
@@ -157,7 +163,7 @@ export async function hybridSearch(ctx: SemanticContext, query: string, opts: { 
       compareDesc(a.memory.updated_at, b.memory.updated_at) ||
       compareAsc(a.memory.id, b.memory.id),
   );
-  return pullInNewer(ctx, hits.slice(0, Math.max(0, opts.limit)), opts.limit);
+  return pullInNewer(ctx, hits.slice(0, Math.max(0, opts.limit)), opts.limit, includeHistorical);
 }
 
 const compareAsc = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -175,7 +181,7 @@ const isNewer = (a: Memory, b: Memory) =>
  * when there is none the pull is skipped. Uses cached stored vectors only: no embedder calls. Only rows
  * of the current model and its dims are read; with the dims still unknown, only equal-length vectors compare.
  */
-export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: number): RecallHit[] {
+export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: number, includeHistorical = false): RecallHit[] {
   const out = hits.slice(0, Math.max(0, limit));
   if (out.length === 0) return out;
   const model = ctx.embedder?.model ?? ctx.config.model;
@@ -194,7 +200,7 @@ export function pullInNewer(ctx: SemanticContext, hits: RecallHit[], limit: numb
       const c = dot(own, vector);
       if (c < threshold) continue;
       const memory = ctx.services.memories.get(id);
-      if (memory && isNewer(memory, puller.memory)) candidates.push({ memory, cosine: c });
+      if (memory && isNewer(memory, puller.memory) && (includeHistorical || memory.status !== "historical")) candidates.push({ memory, cosine: c });
     }
     candidates.sort((a, b) => b.cosine - a.cosine || compareAsc(a.memory.id, b.memory.id));
     let at = out.indexOf(puller) + 1;
@@ -268,7 +274,18 @@ export function applyM1(memories: Memory[], timezone: string): Memory[] {
  */
 export function newerWinsNote(): Memory {
   const epoch = "1970-01-01T00:00:00.000Z";
-  return { id: "semantic-newer-wins-note", content: NEWER_WINS_NOTE, category: "other", source: "agent", created_at: epoch, updated_at: epoch };
+  return {
+    id: "semantic-newer-wins-note",
+    content: NEWER_WINS_NOTE,
+    category: "other",
+    source: "agent",
+    status: "active",
+    superseded_by: null,
+    valid_from: null,
+    valid_until: null,
+    created_at: epoch,
+    updated_at: epoch,
+  };
 }
 
 /**
@@ -278,9 +295,16 @@ export function newerWinsNote(): Memory {
  */
 export async function selectSemanticMemories(ctx: SemanticContext, query: string): Promise<Memory[]> {
   await runIndexer(ctx, { maxEmbed: LAZY_INDEX_BATCH });
+  const past = hasHistoricalIntent(query);
   const selected = new Map<string, Memory>();
-  for (const h of await hybridSearch(ctx, query, { limit: MAX_RELEVANT_MEMORIES })) selected.set(h.memory.id, h.memory);
-  for (const m of ctx.services.memories.list({ category: "preference", limit: ALWAYS_INCLUDE_PREFERENCES })) {
+  for (const h of await hybridSearch(ctx, query, { limit: MAX_RELEVANT_MEMORIES, includeHistorical: past })) selected.set(h.memory.id, h.memory);
+  // For questions about the past, earlier versions of the recalled facts come along (memory history).
+  if (past) {
+    for (const m of [...selected.values()]) {
+      for (const p of ctx.services.memories.predecessors(m.id)) if (selected.size < MAX_RELEVANT_MEMORIES) selected.set(p.id, p);
+    }
+  }
+  for (const m of ctx.services.memories.list({ category: "preference", limit: ALWAYS_INCLUDE_PREFERENCES, status: "active" })) {
     if (selected.size >= MAX_RELEVANT_MEMORIES) break;
     selected.set(m.id, m);
   }

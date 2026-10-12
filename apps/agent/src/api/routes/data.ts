@@ -1,7 +1,11 @@
 import {
+  memoryCorrectSchema,
   memoryCreateSchema,
+  memoryListQuerySchema,
+  memoryReviewResolveSchema,
+  memoryStatusSchema,
   memoryUpdateSchema,
-  MEMORY_CATEGORIES,
+  type MemoryReview,
   noteCreateSchema,
   noteUpdateSchema,
   projectCreateSchema,
@@ -53,34 +57,70 @@ dataRoutes.delete("/tasks/:id", (c) => {
 });
 
 // ---------- Memories ----------
+// Responses never include embeddings; vectors stay server-side.
 
 dataRoutes.get("/memories", (c) => {
-  const q = query(c, z.object({ q: z.string().max(200).optional(), category: z.enum(MEMORY_CATEGORIES).optional() }));
+  const q = query(c, memoryListQuerySchema);
   const s = c.env.agent.services;
-  return c.json({ memories: s.memories.list(q), total: s.memories.count() });
+  return c.json({
+    memories: s.memories.list({ q: q.q, category: q.category, status: q.status }),
+    total: s.memories.count(),
+    counts: { active: s.memories.count("active"), historical: s.memories.count("historical"), review: s.memories.count("review") },
+  });
 });
 
 dataRoutes.post("/memories", async (c) => {
   const input = await body(c, memoryCreateSchema);
-  return c.json({ memory: c.env.agent.services.memories.create({ ...input, source: "manual" }) }, 201);
+  const result = await c.env.agent.services.memoryHistory.create({ ...input, source: "manual" });
+  return c.json({ memory: result.memory, superseded: result.superseded, reviews: result.reviews.length }, 201);
 });
 
 dataRoutes.patch("/memories/:id", async (c) => {
   const patch = await body(c, memoryUpdateSchema);
-  return c.json({ memory: c.env.agent.services.memories.update(c.req.param("id"), patch) });
+  const result = await c.env.agent.services.memoryHistory.update(c.req.param("id"), patch);
+  return c.json({ memory: result.memory, superseded: result.superseded, reviews: result.reviews.length });
 });
 
 dataRoutes.delete("/memories/:id", (c) => {
-  c.env.agent.services.memories.delete(c.req.param("id"));
+  c.env.agent.services.memoryHistory.delete(c.req.param("id"));
   return c.json({ deleted: true });
 });
 
 dataRoutes.delete("/memories", async (c) => {
   await body(c, z.object({ confirm: z.literal("DELETE") }));
   const s = c.env.agent.services;
-  const deleted = s.memories.clear();
+  const deleted = s.memoryHistory.clear();
   s.activity.record("privacy.memories_cleared", `Cleared ${deleted} memories`);
   return c.json({ deleted });
+});
+
+dataRoutes.get("/memories/reviews", (c) => {
+  const s = c.env.agent.services;
+  const reviews: MemoryReview[] = s.memories.listReviews().flatMap((r) => {
+    const memory = s.memories.get(r.memory_id);
+    const other = s.memories.get(r.other_id);
+    return memory && other ? [{ id: r.id, memory, other, relationship: r.relationship, reason: r.reason, created_at: r.created_at }] : [];
+  });
+  return c.json({ reviews });
+});
+
+dataRoutes.post("/memories/reviews/:id", async (c) => {
+  const { action } = await body(c, memoryReviewResolveSchema);
+  return c.json(c.env.agent.services.memoryHistory.resolveReview(c.req.param("id"), action));
+});
+
+dataRoutes.get("/memories/:id/history", (c) => c.json(c.env.agent.services.memoryHistory.lifecycle.history(c.req.param("id"))));
+
+dataRoutes.post("/memories/:id/status", async (c) => {
+  const { status } = await body(c, memoryStatusSchema);
+  return c.json({ memory: c.env.agent.services.memoryHistory.lifecycle.setStatus(c.req.param("id"), status) });
+});
+
+/** Saves a newer version of a fact; the old one is kept as history. */
+dataRoutes.post("/memories/:id/correct", async (c) => {
+  const input = await body(c, memoryCorrectSchema);
+  const result = await c.env.agent.services.memoryHistory.correct(c.req.param("id"), input.content, input.category);
+  return c.json({ memory: result.memory, superseded: result.superseded, reviews: result.reviews.length }, 201);
 });
 
 // ---------- Notes ----------

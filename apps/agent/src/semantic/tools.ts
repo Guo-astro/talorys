@@ -19,11 +19,17 @@ function wrapSearchMemories(sem: SemanticContext): ToolDefinition {
   return {
     ...base,
     execute: async (raw: unknown, ctx: ToolContext) => {
-      const { query } = raw as { query: string };
+      const { query, include_history } = raw as { query: string; include_history?: boolean };
       const timezone = ctx.services.settings.get().timezone;
-      const hits = await hybridSearch(sem, query, { limit: SEARCH_MEMORY_LIMIT });
+      const hits = await hybridSearch(sem, query, { limit: SEARCH_MEMORY_LIMIT, includeHistorical: include_history });
       return {
-        memories: hits.map(({ memory: m }) => ({ id: m.id, content: m.content, category: m.category, saved: savedAt(m.updated_at, timezone) })),
+        memories: hits.map(({ memory: m }) => ({
+          id: m.id,
+          content: m.content,
+          category: m.category,
+          saved: savedAt(m.updated_at, timezone),
+          ...(m.status !== "active" ? { status: m.status } : {}),
+        })),
       };
     },
   };

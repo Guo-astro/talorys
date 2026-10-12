@@ -88,7 +88,7 @@ function context(a: TalorysAgent, patch: ContextPatch = {}, embedder: Embedder |
 }
 
 function memory(id: string, updated_at: string, created_at = updated_at, content = `memory ${id}`): Memory {
-  return { id, content, category: "fact", source: "manual", created_at, updated_at };
+  return { id, content, category: "fact", source: "manual", status: "active", superseded_by: null, valid_from: null, valid_until: null, created_at, updated_at };
 }
 
 const setUpdated = (a: TalorysAgent, id: string, iso: string) =>

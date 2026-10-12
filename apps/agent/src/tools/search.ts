@@ -15,7 +15,7 @@ export const searchTools = [
       return {
         tasks: s.tasks.list({ q: i.query, limit: 5 }).map((t) => presentTask(t, ctx.timezone)),
         notes: s.notes.search(i.query, 5).map((n) => ({ id: n.id, title: n.title, excerpt: n.content.slice(0, 200) })),
-        memories: s.memories.search(i.query, 5).map((m) => ({ id: m.id, content: m.content })),
+        memories: s.memories.search(i.query, 5).map((m) => ({ id: m.id, content: m.content, ...(m.status !== "active" ? { status: m.status } : {}) })),
         conversations: s.conversations.list({ q: i.query, limit: 5 }).map((c) => ({ id: c.id, title: c.title })),
       };
     },

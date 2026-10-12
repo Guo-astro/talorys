@@ -93,7 +93,11 @@ semanticRoutes.use("/memories/*", async (c, next) => {
   if (c.req.method === "DELETE") {
     const id = decodeURIComponent(c.req.path.slice(c.req.path.lastIndexOf("/") + 1));
     afterWrite(c, config, (db) => purgeVector(db, id));
-  } else if (c.req.method === "PATCH") afterWrite(c, config);
+  } else if (c.req.method === "PATCH" || c.req.method === "POST") {
+    // PATCH edits; POST under /memories/* covers "correct" (a new version) and reviews. The indexer
+    // only embeds what's pending, so status-only changes cost nothing.
+    afterWrite(c, config);
+  }
 });
 
 semanticRoutes.use("/import", async (c, next) => {

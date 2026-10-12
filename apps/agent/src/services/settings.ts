@@ -1,4 +1,4 @@
-import { DEFAULT_LIMITS, DEFAULT_MODEL, type Settings, settingsSchema, settingsUpdateSchema } from "@talorys/shared";
+import { DEFAULT_LIMITS, DEFAULT_MODEL, DEFAULT_MEMORY_HISTORY, type Settings, settingsSchema, settingsUpdateSchema } from "@talorys/shared";
 import type { z } from "zod";
 import { type Database, now } from "../db/database";
 import { ValidationError } from "../api/errors";
@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   limits: { ...DEFAULT_LIMITS },
   autoMemory: true,
   demoMode: false,
+  memoryHistory: { ...DEFAULT_MEMORY_HISTORY },
 };
 
 const SETTINGS_KEY = "app.settings";
@@ -31,6 +32,7 @@ export class SettingsService {
       ...this.defaults,
       ...stored,
       limits: { ...DEFAULT_SETTINGS.limits, ...(stored.limits ?? {}) },
+      memoryHistory: { ...DEFAULT_SETTINGS.memoryHistory, ...(stored.memoryHistory ?? {}) },
     };
     const parsed = settingsSchema.safeParse(merged);
     if (parsed.success) return parsed.data;
@@ -47,6 +49,7 @@ export class SettingsService {
       ...current,
       ...stripUndefined(parsedPatch.data),
       limits: { ...current.limits, ...stripUndefined(parsedPatch.data.limits ?? {}) },
+      memoryHistory: { ...current.memoryHistory, ...stripUndefined(parsedPatch.data.memoryHistory ?? {}) },
     };
     const parsed = settingsSchema.safeParse(next);
     if (!parsed.success) throw ValidationError.fromZod(parsed.error);

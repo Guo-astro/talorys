@@ -4,6 +4,8 @@ import type {
   Conversation,
   ChatMessage,
   Memory,
+  MemoryHistory,
+  MemoryReview,
   Note,
   Notification,
   Project,
@@ -21,7 +23,9 @@ export const keys = {
   conversations: (q?: string) => ["conversations", q ?? ""] as const,
   conversation: (id: string) => ["conversation", id] as const,
   tasks: ["tasks"] as const,
-  memories: (q?: string) => ["memories", q ?? ""] as const,
+  memories: (q?: string, status?: string) => ["memories", q ?? "", status ?? "all"] as const,
+  memoryReviews: ["memories", "reviews"] as const,
+  memoryHistory: (id: string) => ["memories", "history", id] as const,
   notes: (q?: string) => ["notes", q ?? ""] as const,
   projects: ["projects"] as const,
   automations: ["automations"] as const,
@@ -72,11 +76,31 @@ export function useTasks() {
   });
 }
 
-export function useMemories(q?: string) {
+export type MemoryStatusFilter = "all" | "active" | "historical" | "review";
+
+export function useMemories(q?: string, status: MemoryStatusFilter = "all") {
   return useQuery({
-    queryKey: keys.memories(q),
-    queryFn: () => api<{ memories: Memory[]; total: number }>(`/memories${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+    queryKey: keys.memories(q, status),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      if (status !== "all") params.set("status", status);
+      const qs = params.toString();
+      return api<{ memories: Memory[]; total: number; counts?: { active: number; historical: number; review: number } }>(`/memories${qs ? `?${qs}` : ""}`);
+    },
     placeholderData: (prev) => prev,
+  });
+}
+
+export function useMemoryReviews() {
+  return useQuery({ queryKey: keys.memoryReviews, queryFn: () => api<{ reviews: MemoryReview[] }>("/memories/reviews").then((r) => r.reviews) });
+}
+
+export function useMemoryHistory(id: string | null) {
+  return useQuery({
+    queryKey: keys.memoryHistory(id ?? ""),
+    queryFn: () => api<MemoryHistory>(`/memories/${id}/history`),
+    enabled: !!id,
   });
 }
 

@@ -4,7 +4,7 @@ import { type AIProvider, classifyAiError, estimateTokens, type ProviderTool } f
 import { AppError, NotFoundError } from "../api/errors";
 import { ALL_TOOLS, ToolExecutor, type ToolDefinition } from "../tools";
 import { buildSystemPrompt } from "./prompt";
-import { SUMMARIZE_THRESHOLD, buildContextWindow, selectRelevantMemories, summarizationPrompt } from "./memory";
+import { SUMMARIZE_THRESHOLD, buildContextWindow, memoryTokenBudget, selectRelevantMemories, summarizationPrompt } from "./memory";
 import type { RunnerExtensions } from "../semantic/hooks";
 
 export interface TurnInput {
@@ -103,7 +103,8 @@ export class AgentRunner {
       if (!s.usage.canUseAi(limits)) throw aiLimitReached(limits.maxAiRequestsPerDay);
 
       // 2. Context: relevant memories, summary, recent history within the token budget.
-      const memories = this.ext ? await this.ext.selectMemories(userMessage.content) : selectRelevantMemories(s.memories, userMessage.content);
+      const selected = this.ext ? await this.ext.selectMemories(userMessage.content) : selectRelevantMemories(s.memories, userMessage.content);
+      const memories = s.memoryHistory.promptMemories(selected, memoryTokenBudget(limits));
       const history = s.pendingActions
         .withCurrentStatus(s.conversations.messages(conversation.id, { limit: 200 }))
         .filter((m) => m.role === "user" || m.status === "complete")
@@ -247,7 +248,10 @@ export class AgentRunner {
       timezone: settings.timezone,
       now: new Date(),
       autoMemory: false,
-      memories: this.ext ? await this.ext.selectMemories(prompt) : selectRelevantMemories(s.memories, prompt),
+      memories: s.memoryHistory.promptMemories(
+        this.ext ? await this.ext.selectMemories(prompt) : selectRelevantMemories(s.memories, prompt),
+        memoryTokenBudget(settings.limits),
+      ),
       scheduled: true,
     });
     let text = "";

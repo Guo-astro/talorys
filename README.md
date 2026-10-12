@@ -21,6 +21,7 @@ npx create-talorys@latest
 - **A private assistant** — chat with streaming responses, Markdown and tool activity indicators.
 - **Memory** — durable personal facts and preferences you can view, edit and delete. Only the most relevant memories are sent to the model on each turn.
 - **Semantic recall (optional)** — finds memories by meaning as well as keyword, and lists them newest first with their saved date. Off by default; turn it on in Settings → AI or install with `--semantic`. See [docs/semantic-recall.md](docs/semantic-recall.md).
+- **Memory history** — facts that change over time: when you say you sold your car, the old one is kept as a past fact instead of being treated as current, and unclear conflicts wait for your review. See [docs/memory-history.md](docs/memory-history.md).
 - **Tasks, notes and projects** — full CRUD in the UI, and from chat ("Add a task to review my project tomorrow").
 - **Automations** — one-time and recurring reminders, daily task digests and optional AI routines, delivered to an in-app notification center. They run on Durable Object alarms, so nothing has to stay online.
 - **Single-user by design** — no signup, no accounts, no teams. The installer sets the owner password.
@@ -185,13 +186,15 @@ Other scripts: `npm run build`, `npm test`, `npm run test:e2e`, `npm run test:pa
 **Settings → Privacy → Download backup** produces `talorys-backup.json` with
 conversations, memories, tasks, notes, projects, settings and automations
 (never sessions or credentials). **Import** validates the file and merges it in
-one transaction; importing the same backup twice is harmless. Settings include
+one transaction; importing the same backup twice is harmless, and a memory you
+edited locally after the backup was made is not overwritten. Memory history
+(current vs. past facts) is included. Older backups import as before. Settings include
 the effective installer defaults. If an imported timezone changes, retained
 local automations are also rescheduled in that timezone. A backup file is
 treated as untrusted: new automations arrive paused, existing automations are
-never changed except to pause them, and the model, limits, demo mode and
-auto-memory settings are kept as they are (the import result lists any it
-skipped).
+never changed except to pause them, and the model, limits, demo mode,
+auto-memory and memory history settings are kept as they are (the import
+result lists any it skipped).
 
 ## 10. Update
 

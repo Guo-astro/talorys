@@ -194,6 +194,29 @@ export const MIGRATIONS: Migration[] = [
     name: "message provenance",
     statements: [`ALTER TABLE tal_messages ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'`],
   },
+  {
+    version: 4,
+    name: "memory history",
+    statements: [
+      // Lifecycle columns. Existing memories stay current ("active") with no relationships.
+      `ALTER TABLE tal_memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+      `ALTER TABLE tal_memories ADD COLUMN superseded_by TEXT`,
+      `ALTER TABLE tal_memories ADD COLUMN valid_from TEXT`,
+      `ALTER TABLE tal_memories ADD COLUMN valid_until TEXT`,
+      `CREATE INDEX IF NOT EXISTS tal_memories_status ON tal_memories(status, updated_at)`,
+      `CREATE INDEX IF NOT EXISTS tal_memories_superseded_by ON tal_memories(superseded_by)`,
+      `CREATE TABLE IF NOT EXISTS tal_memory_reviews (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        other_id TEXT NOT NULL,
+        relationship TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS tal_memory_reviews_memory ON tal_memory_reviews(memory_id)`,
+      `CREATE INDEX IF NOT EXISTS tal_memory_reviews_other ON tal_memory_reviews(other_id)`,
+    ],
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

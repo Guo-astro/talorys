@@ -1,4 +1,13 @@
-import { BACKUP_FORMAT, BACKUP_VERSION, type Backup, TALORYS_VERSION, backupSchema, scheduleSpecSchema } from "@talorys/shared";
+import {
+  BACKUP_FORMAT,
+  BACKUP_VERSION,
+  type Backup,
+  MEMORY_CATEGORIES,
+  MEMORY_STATUSES,
+  TALORYS_VERSION,
+  backupSchema,
+  scheduleSpecSchema,
+} from "@talorys/shared";
 import type { Services } from "./container";
 import { ValidationError } from "../api/errors";
 import { decodeTools } from "../db/repositories/conversations";
@@ -7,7 +16,7 @@ import { decodeTools } from "../db/repositories/conversations";
  * Settings a backup may never change: they control cost and model behaviour, and a
  * backup file is untrusted input. The owner changes them in Settings instead.
  */
-export const IMPORT_IGNORED_SETTINGS = ["model", "limits", "demoMode", "autoMemory"] as const;
+export const IMPORT_IGNORED_SETTINGS = ["model", "limits", "demoMode", "autoMemory", "memoryHistory"] as const;
 
 /** Builds a portable backup. Sessions, login attempts and credentials are never exported. */
 export function exportData(s: Services): Backup {
@@ -21,7 +30,10 @@ export function exportData(s: Services): Backup {
       settings: s.settings.get(),
       conversations: db.all(`SELECT id, title, summary, summary_upto, created_at, updated_at FROM tal_conversations ORDER BY created_at`),
       messages: db.all(`SELECT id, conversation_id, role, content, tools, status, error, created_at FROM tal_messages ORDER BY created_at`),
-      memories: db.all(`SELECT * FROM tal_memories ORDER BY created_at`),
+      // Lifecycle fields travel with each memory; embeddings are derived data and are rebuilt after import.
+      memories: db.all(
+        `SELECT id, content, category, source, status, superseded_by, valid_from, valid_until, created_at, updated_at FROM tal_memories ORDER BY created_at`,
+      ),
       tasks: db.all(`SELECT * FROM tal_tasks ORDER BY created_at`),
       notes: db.all(`SELECT * FROM tal_notes ORDER BY created_at`),
       projects: db.all(`SELECT * FROM tal_projects ORDER BY created_at`),
@@ -100,13 +112,29 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
       );
       messages++;
     }
+    const statedDate = (v: unknown) => (typeof v === "string" && /^\d{4}(-\d{2}(-\d{2})?)?$/.test(v) ? v : null);
+    const importedLinks: { id: string; superseded_by: string }[] = [];
     for (const m of d.memories) {
+      const existing = db.one<{ content: string; updated_at: string }>(`SELECT content, updated_at FROM tal_memories WHERE id = ?`, m.id);
+      // Never overwrite a newer local edit with an older backup copy.
+      if (existing && existing.updated_at >= m.updated_at) continue;
+      // Older backups (before Smart Memory) have no lifecycle fields: those memories stay current.
+      const status = pick(m.status, MEMORY_STATUSES, "active");
       db.run(
-        `INSERT INTO tal_memories (id, content, category, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET content = excluded.content, category = excluded.category, updated_at = excluded.updated_at`,
-        m.id, m.content, pick(m.category, ["preference", "fact", "goal", "project", "habit", "person", "other"], "other"),
-        "import", m.created_at, m.updated_at,
+        `INSERT INTO tal_memories (id, content, category, source, status, superseded_by, valid_from, valid_until, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET content = excluded.content, category = excluded.category, status = excluded.status,
+           valid_from = excluded.valid_from, valid_until = excluded.valid_until, updated_at = excluded.updated_at`,
+        m.id, m.content, pick(m.category, MEMORY_CATEGORIES, "other"), "import", status,
+        statedDate(m.valid_from), statedDate(m.valid_until), m.created_at, m.updated_at,
       );
+      if (typeof m.superseded_by === "string" && m.superseded_by) importedLinks.push({ id: m.id, superseded_by: m.superseded_by });
+    }
+    // Relationships are restored only when they point at an existing memory and don't form a cycle.
+    for (const link of importedLinks) {
+      if (!db.one(`SELECT 1 AS x FROM tal_memories WHERE id = ?`, link.superseded_by)) continue;
+      if (s.memoryHistory.lifecycle.wouldCycle(link.id, link.superseded_by)) continue;
+      db.run(`UPDATE tal_memories SET superseded_by = ? WHERE id = ?`, link.superseded_by, link.id);
     }
     for (const t of d.tasks) {
       db.run(

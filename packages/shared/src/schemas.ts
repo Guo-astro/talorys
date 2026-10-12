@@ -34,13 +34,46 @@ export interface Task {
   completed_at: string | null;
 }
 
+export const MEMORY_STATUSES = ["active", "historical", "uncertain"] as const;
+export type MemoryStatus = (typeof MEMORY_STATUSES)[number];
+
 export interface Memory {
   id: string;
   content: string;
   category: MemoryCategory;
   source: "manual" | "agent" | "import";
+  /** Lifecycle: current fact, past fact kept as history, or flagged as possibly outdated. */
+  status: MemoryStatus;
+  /** The newer memory that replaced this one, if any. */
+  superseded_by: string | null;
+  /** When the fact became / stopped being true, only if explicitly stated (YYYY, YYYY-MM or YYYY-MM-DD). */
+  valid_from: string | null;
+  valid_until: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export const MEMORY_REVIEW_RELATIONSHIPS = ["contradiction", "possible_update"] as const;
+export const MEMORY_REVIEW_ACTIONS = ["keep_both", "mark_historical", "replace", "cancel"] as const;
+export type MemoryReviewAction = (typeof MEMORY_REVIEW_ACTIONS)[number];
+
+/** A possible conflict between a new memory and an older one, waiting for the owner's decision. */
+export interface MemoryReview {
+  id: string;
+  /** The newer memory. */
+  memory: Memory;
+  /** The older memory it may conflict with. */
+  other: Memory;
+  relationship: (typeof MEMORY_REVIEW_RELATIONSHIPS)[number];
+  reason: string;
+  created_at: string;
+}
+
+/** Older and newer versions of a fact, oldest first. */
+export interface MemoryHistory {
+  memory: Memory;
+  previous: Memory[];
+  next: Memory[];
 }
 
 export interface Note {
@@ -207,6 +240,16 @@ export const memoryCreateSchema = z.object({
 // Update schemas are declared without defaults: `.partial()` on a schema with
 // `.default()` would fill omitted fields and silently overwrite stored values.
 export const memoryUpdateSchema = z.object({ content: shortText(2000), category: z.enum(MEMORY_CATEGORIES) }).partial();
+export const memoryListQuerySchema = z.object({
+  q: z.string().max(200).optional(),
+  category: z.enum(MEMORY_CATEGORIES).optional(),
+  status: z.enum(["all", "active", "historical", "review"]).optional(),
+});
+export const memoryStatusSchema = z.object({ status: z.enum(MEMORY_STATUSES) });
+/** Records a newer version of a fact; the old memory is kept as history. */
+export const memoryCorrectSchema = z.object({ content: shortText(2000), category: z.enum(MEMORY_CATEGORIES).optional() });
+export const memoryReviewResolveSchema = z.object({ action: z.enum(MEMORY_REVIEW_ACTIONS) });
+
 
 export const noteCreateSchema = z.object({
   title: shortText(300),
@@ -261,6 +304,14 @@ export const limitsSchema = z.object({
 });
 export type Limits = z.infer<typeof limitsSchema>;
 
+export const memoryHistorySettingsSchema = z.object({
+  /** Detect when a new memory replaces or may contradict an older one (rule-based, no AI). */
+  conflictReview: z.boolean(),
+  /** Ask the chat model to double-check ambiguous conflicts (uses one AI request per check). */
+  aiConflictCheck: z.boolean(),
+});
+export type MemoryHistorySettings = z.infer<typeof memoryHistorySettingsSchema>;
+
 export const settingsSchema = z.object({
   agentName: shortText(60),
   timezone: z.string().refine(isValidTimeZone, "Unknown IANA timezone"),
@@ -271,12 +322,13 @@ export const settingsSchema = z.object({
   autoMemory: z.boolean(),
   /** Documented demo mode: uses the deterministic mock provider instead of Workers AI. */
   demoMode: z.boolean(),
+  memoryHistory: memoryHistorySettingsSchema,
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export const settingsUpdateSchema = settingsSchema
-  .omit({ limits: true })
+  .omit({ limits: true, memoryHistory: true })
   .partial()
-  .extend({ limits: limitsSchema.partial().optional() });
+  .extend({ limits: limitsSchema.partial().optional(), memoryHistory: memoryHistorySettingsSchema.partial().optional() });
 
 export const loginSchema = z.object({ password: z.string().min(1).max(256) });
 export const changePasswordSchema = z.object({

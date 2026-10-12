@@ -10,6 +10,7 @@ import { SettingsService } from "./settings";
 import { ActivityLog, UsageService } from "./usage";
 import { AuthService } from "../auth/auth-service";
 import { AutomationService, type Scheduler } from "../agent/scheduling";
+import { MemoryHistoryService, type MemoryHistoryHooks } from "../memory";
 
 /** All data services for the single owner, bound to one Durable Object's storage. */
 export interface Services {
@@ -27,9 +28,10 @@ export interface Services {
   activity: ActivityLog;
   auth: AuthService;
   automations: AutomationService;
+  memoryHistory: MemoryHistoryService;
 }
 
-export function createServices(storage: DurableObjectStorage, env: Env, scheduler: Scheduler): Services {
+export function createServices(storage: DurableObjectStorage, env: Env, scheduler: Scheduler, memoryHooks: MemoryHistoryHooks = {}): Services {
   const db = new Database(storage);
   const settings = new SettingsService(db, {
     ...(env.TALORYS_DEFAULT_TIMEZONE ? { timezone: env.TALORYS_DEFAULT_TIMEZONE } : {}),
@@ -38,10 +40,12 @@ export function createServices(storage: DurableObjectStorage, env: Env, schedule
   const automationsRepo = new AutomationRepository(db);
   const notifications = new NotificationRepository(db);
   const activity = new ActivityLog(db);
+  const memories = new MemoryRepository(db);
+  const usage = new UsageService(db);
   return {
     db,
     tasks: new TaskRepository(db),
-    memories: new MemoryRepository(db),
+    memories,
     notes: new NoteRepository(db),
     projects: new ProjectRepository(db),
     conversations: new ConversationRepository(db),
@@ -49,7 +53,7 @@ export function createServices(storage: DurableObjectStorage, env: Env, schedule
     notifications,
     pendingActions: new PendingActionRepository(db),
     settings,
-    usage: new UsageService(db),
+    usage,
     activity,
     auth: new AuthService(db, settings, {
       passwordHash: env.OWNER_PASSWORD_HASH,
@@ -57,5 +61,6 @@ export function createServices(storage: DurableObjectStorage, env: Env, schedule
       sessionSecret: env.SESSION_SECRET,
     }),
     automations: new AutomationService(automationsRepo, settings, activity, scheduler),
+    memoryHistory: new MemoryHistoryService(db, memories, settings, usage, activity, memoryHooks),
   };
 }

@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { checkPasswordStrength, GITHUB_URL, LIMIT_CEILINGS, type Limits, type Settings, TALORYS_VERSION } from "@talorys/shared";
+import { checkPasswordStrength, GITHUB_URL, LIMIT_CEILINGS, type Limits, type MemoryHistorySettings, type Settings, TALORYS_VERSION } from "@talorys/shared";
 import { Download, ExternalLink, LogOut, Monitor, Moon, Sun, Upload } from "lucide-react";
 import { Badge, Button, Card, ConfirmDialog, ErrorNotice, Input, Label, PageHeader, Select, Spinner, Switch } from "../components/ui";
 import { SemanticRecallCard } from "../components/SemanticRecallCard";
@@ -80,7 +80,8 @@ export default function SettingsPage() {
 
 function useSaveSettings() {
   const qc = useQueryClient();
-  return useApiMutation((patch: Partial<Omit<Settings, "limits">> & { limits?: Partial<Limits> }) => api<{ settings: Settings }>("/settings", { method: "PATCH", body: patch }), {
+  type Patch = Partial<Omit<Settings, "limits" | "memoryHistory">> & { limits?: Partial<Limits>; memoryHistory?: Partial<MemoryHistorySettings> };
+  return useApiMutation((patch: Patch) => api<{ settings: Settings }>("/settings", { method: "PATCH", body: patch }), {
     success: "Settings saved",
     onSuccess: (r) => {
       qc.setQueryData(keys.settings, r.settings);
@@ -280,7 +281,32 @@ function AiTab({ settings }: { settings: Settings }) {
         )}
       </Section>
       <SemanticRecallCard />
+      <MemoryHistorySection settings={settings} />
     </>
+  );
+}
+
+function MemoryHistorySection({ settings }: { settings: Settings }) {
+  const save = useSaveSettings();
+  const mh = settings.memoryHistory;
+  return (
+    <Section title="Memory history">
+      <Row
+        label="Memory conflict review"
+        hint="When a new memory clearly replaces an old one (“I sold my car…”), keep the old one as a past fact. Unclear cases wait for you on the Memory page. Uses no AI."
+      >
+        <div className="flex justify-end">
+          <Switch checked={mh.conflictReview} onChange={(v) => save.mutate({ memoryHistory: { conflictReview: v } })} label="Memory conflict review" />
+        </div>
+      </Row>
+      {mh.conflictReview && (
+        <Row label="Double-check conflicts with AI" hint="For unclear conflicts only, ask the chat model whether they really conflict. Uses one AI request per check. It never changes memories by itself.">
+          <div className="flex justify-end">
+            <Switch checked={mh.aiConflictCheck} onChange={(v) => save.mutate({ memoryHistory: { aiConflictCheck: v } })} label="Double-check conflicts with AI" />
+          </div>
+        </Row>
+      )}
+    </Section>
   );
 }
 
@@ -334,7 +360,7 @@ function PrivacyTab() {
             <Download className="h-4 w-4" /> Download backup
           </a>
         </Row>
-        <Row label="Import data" hint="Merges a backup into your data. Existing items with the same id are updated, except automations, which are kept as they are; new automations arrive paused. Model, limits, demo mode and auto-memory settings are not imported. Nothing is deleted.">
+        <Row label="Import data" hint="Merges a backup into your data. Existing items with the same id are updated, except automations, which are kept as they are; new automations arrive paused. Model, limits, demo mode, auto-memory and memory history settings are not imported. Nothing is deleted.">
           <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && void onImport(e.target.files[0])} />
           <Button variant="outline" className="w-full justify-center" loading={importing} onClick={() => fileRef.current?.click()}>
             <Upload className="h-4 w-4" /> Choose backup file
