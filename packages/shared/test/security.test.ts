@@ -7,6 +7,9 @@ describe("password policy", () => {
   it("rejects weak passwords and accepts reasonable ones", () => {
     expect(checkPasswordStrength("short1!")).toMatch(/at least/);
     expect(checkPasswordStrength("aaaaaaaaaaaa")).toMatch(/repeating/);
+    expect(checkPasswordStrength("🔐".repeat(12))).toMatch(/repeating/);
+    expect(checkPasswordStrength("🇺🇸".repeat(5))).toMatch(/repeating/);
+    expect(checkPasswordStrength("👨‍👩‍👧‍👦".repeat(3))).toMatch(/repeating/);
     expect(checkPasswordStrength("alllowercase")).toMatch(/Mix/);
     expect(checkPasswordStrength("password1234")).toMatch(/common/);
     expect(checkPasswordStrength("Sunny-Garden-42")).toBeNull();
