@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeNextRun, describeSchedule, scheduleSpecSchema, zonedTimeToUtc, getZonedParts } from "../src/recurrence";
+import { computeNextRun, describeSchedule, scheduleSpecSchema, zonedTimeToUtc, getZonedParts, isValidCalendarDate } from "../src/recurrence";
 
 const NY = "America/New_York";
 
@@ -60,6 +60,46 @@ describe("computeNextRun", () => {
     expect(scheduleSpecSchema.safeParse({ type: "interval", minutes: 5 }).success).toBe(false);
     expect(scheduleSpecSchema.safeParse({ type: "daily", time: "25:00" }).success).toBe(false);
     expect(scheduleSpecSchema.safeParse({ type: "weekly", days: [], time: "09:00" }).success).toBe(false);
+    expect(scheduleSpecSchema.safeParse({ type: "once", at: "2026-02-31T09:00" }).success).toBe(false);
+    expect(scheduleSpecSchema.safeParse({ type: "once", at: "2026-02-29T09:00" }).success).toBe(false);
+    expect(scheduleSpecSchema.safeParse({ type: "once", at: "2028-02-29T09:00" }).success).toBe(true);
     expect(describeSchedule({ type: "weekly", days: [1, 3], time: "09:00" })).toBe("Every Monday, Wednesday at 09:00");
   });
 });
+
+describe("isValidCalendarDate", () => {
+  it("rejects non-existent calendar dates like Feb 31", () => {
+    expect(isValidCalendarDate(2026, 2, 31)).toBe(false);
+    expect(isValidCalendarDate(2026, 4, 31)).toBe(false);
+    expect(isValidCalendarDate(2026, 2, 29)).toBe(false); // 2026 is not a leap year
+    expect(isValidCalendarDate(2026, 13, 1)).toBe(false);
+    expect(isValidCalendarDate(2026, 0, 1)).toBe(false);
+  });
+
+  it("handles leap years correctly", () => {
+    expect(isValidCalendarDate(2024, 2, 29)).toBe(true);
+    expect(isValidCalendarDate(2028, 2, 29)).toBe(true);
+    expect(isValidCalendarDate(2000, 2, 29)).toBe(true); // 400-year leap rule
+    expect(isValidCalendarDate(1900, 2, 29)).toBe(false); // 100-year non-leap rule
+  });
+
+  it("rejects non-integer dates", () => {
+    expect(isValidCalendarDate(2026.5, 5, 10)).toBe(false);
+    expect(isValidCalendarDate(2026, 5.5, 10)).toBe(false);
+    expect(isValidCalendarDate(2026, 5, 10.5)).toBe(false);
+    expect(isValidCalendarDate(Number.NaN, 5, 10)).toBe(false);
+    expect(isValidCalendarDate(2026, Number.NaN, 10)).toBe(false);
+    expect(isValidCalendarDate(2026, 5, Number.NaN)).toBe(false);
+  });
+
+  it("handles 0-99 years accurately without 1900 remapping", () => {
+    expect(isValidCalendarDate(0, 2, 29)).toBe(true); // year 0 is a leap year (divisible by 400)
+    expect(isValidCalendarDate(1, 2, 29)).toBe(false); // year 1 is not a leap year
+    expect(isValidCalendarDate(4, 2, 29)).toBe(true); // year 4 is a leap year
+    expect(isValidCalendarDate(99, 12, 31)).toBe(true);
+    expect(zonedTimeToUtc(1, 1, 1, 9, 0, "UTC").toISOString()).toBe("0001-01-01T09:00:00.000Z");
+    expect(scheduleSpecSchema.safeParse({ type: "once", at: "0000-02-29T10:00" }).success).toBe(true);
+    expect(scheduleSpecSchema.safeParse({ type: "once", at: "0001-02-29T10:00" }).success).toBe(false);
+  });
+});
+

@@ -15,7 +15,15 @@ const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:MM (24h)
 
 /** True when year/month/day name a real calendar date (rejects e.g. 2026-02-31). */
 export function isValidCalendarDate(year: number, month: number, day: number): boolean {
-  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month);
+  return (
+    Number.isInteger(year) &&
+    Number.isInteger(month) &&
+    Number.isInteger(day) &&
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth(year, month)
+  );
 }
 
 export const scheduleSpecSchema = z.discriminatedUnion("type", [
@@ -100,7 +108,10 @@ export function getZonedParts(date: Date, timeZone: string): ZonedParts {
 /** Offset of `timeZone` from UTC at `instant`, in milliseconds. */
 export function timeZoneOffsetMs(instant: number, timeZone: string): number {
   const p = getZonedParts(new Date(instant), timeZone);
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  const d = new Date(0);
+  d.setUTCFullYear(p.year, p.month - 1, p.day);
+  d.setUTCHours(p.hour, p.minute, p.second, 0);
+  const asUtc = d.getTime();
   return asUtc - Math.floor(instant / 1000) * 1000;
 }
 
@@ -113,7 +124,10 @@ export function zonedTimeToUtc(
   minute: number,
   timeZone: string,
 ): Date {
-  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const d = new Date(0);
+  d.setUTCFullYear(year, month - 1, day);
+  d.setUTCHours(hour, minute, 0, 0);
+  const wall = d.getTime();
   const before = timeZoneOffsetMs(wall - 36 * 3600_000, timeZone);
   const after = timeZoneOffsetMs(wall + 36 * 3600_000, timeZone);
   const candidates = [...new Set([wall - before, wall - after])]
@@ -133,7 +147,9 @@ function parseTime(time: string): [number, number] {
 }
 
 function daysInMonth(year: number, month: number): number {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const d = new Date(0);
+  d.setUTCFullYear(year, month, 0);
+  return d.getUTCDate();
 }
 
 /** Next run strictly after `after`, or null when the schedule will never fire again. */
