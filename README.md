@@ -246,7 +246,9 @@ Thanks to everyone who has contributed to Talorys:
 - [Andrew B (@who)](https://github.com/who) — opt-in semantic recall for memories
 - [Mendy Landa (@MendyLanda)](https://github.com/MendyLanda) — single-Worker deployment
 - [Michael Tuszynski (@michaeltuszynski)](https://github.com/michaeltuszynski) — untrusted backup import
-  handling and daily AI budget accounting
+  handling, daily AI budget accounting, and approvals bound to what was shown
+- [김형준 (@wasuphj)](https://github.com/wasuphj) — password policy, recurrence date, and vector
+  guard fixes
 
 ## License
 
