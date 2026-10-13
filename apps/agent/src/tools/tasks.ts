@@ -146,6 +146,11 @@ export const taskTools = [
       const task = resolveTask(i.task, ctx);
       return { targetId: task.id, summary: `Delete task ${quoteTitle(task.title)}` };
     },
+    snapshot: (id, ctx) => {
+      const t = ctx.services.tasks.get(id);
+      // Status is left out: completing a task after the proposal should not block deleting it.
+      return t && [t.title, t.description, t.priority, t.due_at, t.project_id];
+    },
     commit: (id, ctx) => {
       const task = ctx.services.tasks.get(id);
       if (!task) throw new ToolError("This task no longer exists.");
