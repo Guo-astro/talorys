@@ -49,11 +49,17 @@ export class TalorysAgent extends Agent<Env, AgentState> {
         },
         exists: async (id) => (await this.getScheduleById(id)) !== undefined,
       };
-      this._services = createServices(this.ctx.storage, this.env, scheduler, {
-        clef: () => this.clefRun(),
-        neighbors: (memory, opts) => semanticNeighbors(this.services, this.env, memory, opts),
-        ...(this.env.TALORYS_ENV === "development" ? { onAiCheck: (check) => console.info("memory.ai_check", JSON.stringify(check)) } : {}),
-      });
+      this._services = createServices(
+        this.ctx.storage,
+        this.env,
+        scheduler,
+        {
+          clef: () => this.clefRun(),
+          neighbors: (memory, opts) => semanticNeighbors(this.services, this.env, memory, opts),
+          ...(this.env.TALORYS_ENV === "development" ? { onAiCheck: (check) => console.info("memory.ai_check", JSON.stringify(check)) } : {}),
+        },
+        (work) => this.ctx.waitUntil(work),
+      );
       migrate(this._services.db);
     }
     return this._services;
