@@ -33,6 +33,7 @@ export const keys = {
   usage: ["usage"] as const,
   sessions: ["sessions"] as const,
   system: ["system"] as const,
+  update: ["system", "update"] as const,
 };
 
 export function useSettings() {
@@ -147,6 +148,19 @@ export function useSystemInfo() {
     queryFn: () =>
       api<{ version: string; deployed_version: string | null; installation_id: string | null; schema_version: number; ai_binding: boolean; ai_provider: string; environment: string }>("/system"),
   });
+}
+
+export interface UpdateStatus {
+  enabled: boolean;
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  checked_at: string | null;
+}
+
+/** Whether a newer release is published. The server caches the lookup for a day. */
+export function useUpdateStatus() {
+  return useQuery({ queryKey: keys.update, queryFn: () => api<UpdateStatus>("/system/update"), staleTime: 60 * 60_000, retry: false });
 }
 
 /**

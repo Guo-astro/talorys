@@ -326,6 +326,8 @@ export const settingsSchema = z.object({
   /** Documented demo mode: uses the deterministic mock provider instead of Workers AI. */
   demoMode: z.boolean(),
   memoryHistory: memoryHistorySettingsSchema,
+  /** Check the npm registry once a day for a newer Talorys release. */
+  updateCheck: z.boolean(),
 });
 export type Settings = z.infer<typeof settingsSchema>;
 export const settingsUpdateSchema = settingsSchema

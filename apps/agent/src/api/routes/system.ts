@@ -5,6 +5,7 @@ import type { AppEnv } from "../app";
 import { body } from "../middleware";
 import { schemaVersion } from "../../db/migrations";
 import { exportData, importData } from "../../services/backup";
+import { checkForUpdate } from "../../services/update-check";
 
 export const systemRoutes = new Hono<AppEnv>();
 
@@ -79,6 +80,11 @@ systemRoutes.get("/system", (c) => {
     ai_provider: c.env.agent.aiProvider()?.id ?? "none",
     environment: c.env.env.TALORYS_ENV === "development" ? "development" : "production",
   });
+});
+
+systemRoutes.get("/system/update", async (c) => {
+  const current = c.env.env.TALORYS_DEPLOYED_VERSION ?? TALORYS_VERSION;
+  return c.json(await checkForUpdate(c.env.agent.services.settings, current));
 });
 
 systemRoutes.get("/activity", (c) => c.json({ activity: c.env.agent.services.activity.list(100) }));

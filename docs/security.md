@@ -100,6 +100,14 @@ does on its own:
 - `talorys.json` is checked to contain no secret-like values before writing.
 - Error output is sanitized of token-like strings.
 
+## Update check
+
+Once a day, when Settings → About is opened, the Worker fetches
+`https://registry.npmjs.org/create-talorys/latest` to see if a newer version
+exists. The request carries no user data; npm only sees the Worker's IP. The
+browser never contacts npm (`connect-src 'self'` is unchanged). Turn it off
+under Settings → About → Check for updates.
+
 ## Reporting
 
 Please report vulnerabilities privately via GitHub Security Advisories.

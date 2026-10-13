@@ -5,7 +5,7 @@ import { checkPasswordStrength, GITHUB_URL, LIMIT_CEILINGS, type Limits, type Me
 import { Download, ExternalLink, LogOut, Monitor, Moon, Sun, Upload } from "lucide-react";
 import { Badge, Button, Card, ConfirmDialog, ErrorNotice, Input, Label, PageHeader, Select, Spinner, Switch } from "../components/ui";
 import { SemanticRecallCard } from "../components/SemanticRecallCard";
-import { keys, useApiMutation, useSessions, useSettings, useSystemInfo, useUsage } from "../hooks/queries";
+import { keys, useApiMutation, useSessions, useSettings, useSystemInfo, useUpdateStatus, useUsage } from "../hooks/queries";
 import { useSession } from "../hooks/session";
 import { useToast, errorMessage } from "../hooks/toast";
 import { api, ApiError } from "../lib/api";
@@ -75,7 +75,7 @@ export default function SettingsPage() {
           {tab === "AI" && <AiTab settings={settings} />}
           {tab === "Privacy" && <PrivacyTab />}
           {tab === "Security" && <SecurityTab />}
-          {tab === "About" && <AboutTab />}
+          {tab === "About" && <AboutTab settings={settings} />}
         </div>
       )}
     </div>
@@ -91,6 +91,7 @@ function useSaveSettings() {
       qc.setQueryData(keys.settings, r.settings);
       void qc.invalidateQueries({ queryKey: ["session"] });
       void qc.invalidateQueries({ queryKey: keys.automations });
+      void qc.invalidateQueries({ queryKey: keys.update });
     },
   });
 }
@@ -504,12 +505,23 @@ function describeAgent(ua: string): string {
   return os ? `${browser} on ${os}` : browser;
 }
 
-function AboutTab() {
+function AboutTab({ settings }: { settings: Settings }) {
   const info = useSystemInfo();
+  const update = useUpdateStatus();
+  const save = useSaveSettings();
+  const latest = update.data?.update_available ? update.data.latest : null;
   return (
     <Section title="About Talorys">
-      <Row label="Version">
-        <p className="text-right font-mono text-sm">{info.data?.deployed_version ?? TALORYS_VERSION}</p>
+      <Row label="Version" hint={latest ? `Version ${latest} is available. Run the update command below.` : undefined}>
+        <div className="flex items-center justify-end gap-2">
+          {latest && <Badge tone="accent">New</Badge>}
+          <p className="font-mono text-sm">{info.data?.deployed_version ?? TALORYS_VERSION}</p>
+        </div>
+      </Row>
+      <Row label="Check for updates" hint="Once a day, your Worker asks the npm registry for the latest version number. Nothing about you or your data is sent.">
+        <div className="flex justify-end">
+          <Switch checked={settings.updateCheck} onChange={(v) => save.mutate({ updateCheck: v })} label="Check for updates" />
+        </div>
       </Row>
       <Row label="Deployment" hint="Your own Cloudflare account. Pages frontend → service binding → private Worker → Durable Object.">
         <div className="space-y-1 text-right text-xs text-fg-muted">

@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoMemory: true,
   demoMode: false,
   memoryHistory: { ...DEFAULT_MEMORY_HISTORY },
+  updateCheck: true,
 };
 
 const SETTINGS_KEY = "app.settings";
