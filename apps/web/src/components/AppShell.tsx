@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { Bell, Brain, CalendarClock, CheckSquare, LogOut, MessageSquare, NotebookPen, Settings } from "lucide-react";
 import { Logo } from "./Logo";
 import { NotificationCenter } from "./NotificationCenter";
+import { useKeyboardOpenFlag } from "../hooks/keyboard";
 import { useSession } from "../hooks/session";
 import { useNotifications, useSettings } from "../hooks/queries";
 import { cn } from "../lib/utils";
@@ -20,6 +21,7 @@ export function AppShell() {
   const settings = useSettings();
   const notifications = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
+  useKeyboardOpenFlag();
   const location = useLocation();
   const unread = notifications.data?.unread ?? 0;
   const agentName = settings.data?.agentName ?? "Talorys";
@@ -113,7 +115,7 @@ export function AppShell() {
         {/* Mobile bottom navigation */}
         <nav
           aria-label="Main"
-          className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+          className="mobile-nav fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
         >
           {NAV.map(({ to, label, icon: Icon }) => (
             <NavLink
