@@ -4,7 +4,7 @@ import { estimateTokens } from "../ai/provider";
 import type { Services } from "../services/container";
 import { UsageService } from "../services/usage";
 import type { SemanticConfig } from "./config";
-import { MODEL_DIMS, createEmbedder, reserveEmbedding } from "./embeddings";
+import { MODEL_DIMS, MeteredEmbedder, createEmbedder, reserveEmbedding } from "./embeddings";
 import { type IndexerContext, runIndexer } from "./indexer";
 import { ensureSemanticSchema } from "./migrations";
 import { cachedVectors, dot, normalize } from "./vectorStore";
@@ -46,7 +46,8 @@ export interface SemanticContext extends IndexerContext {
 }
 
 export function createSemanticContext(services: Services, env: Env, config: SemanticConfig): SemanticContext {
-  return { db: services.db, services, config, embedder: createEmbedder(env, services.settings, config.model) };
+  const embedder = createEmbedder(env, services.settings, config.model);
+  return { db: services.db, services, config, embedder: embedder && new MeteredEmbedder(services.db, embedder) };
 }
 
 export interface RecallHit {

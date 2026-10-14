@@ -6,6 +6,7 @@ import { Download, ExternalLink, LogOut, Monitor, Moon, Sun, Upload } from "luci
 import { Badge, Button, Card, ConfirmDialog, ErrorNotice, Input, Label, PageHeader, Select, Spinner, Switch } from "../components/ui";
 import { SemanticRecallCard } from "../components/SemanticRecallCard";
 import { PushNotificationsCard } from "../components/PushNotificationsCard";
+import { UsageBreakdown, UsagePricingNote } from "../components/UsageBreakdown";
 import { keys, useApiMutation, useSessions, useSettings, useSystemInfo, useUpdateStatus, useUsage } from "../hooks/queries";
 import { useSession } from "../hooks/session";
 import { useToast, errorMessage } from "../hooks/toast";
@@ -259,8 +260,8 @@ function AiTab({ settings }: { settings: Settings }) {
           <>
             <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
               {[
-                ["AI requests today", `${usage.data.today.ai_requests} / ${usage.data.limits.maxAiRequestsPerDay}`],
-                ["Tokens today (est.)", (usage.data.today.input_tokens_estimate + usage.data.today.output_tokens_estimate).toLocaleString()],
+                ["Chat-model requests today", `${usage.data.today.ai_requests} / ${usage.data.limits.maxAiRequestsPerDay}`],
+                ["AI errors today", usage.data.today.ai_errors.toLocaleString()],
                 ["Tool calls today", String(usage.data.today.tool_calls)],
                 ["Scheduled AI runs", `${usage.data.today.scheduled_ai_runs} / ${usage.data.limits.maxScheduledAiRunsPerDay}`],
               ].map(([label, value]) => (
@@ -270,16 +271,24 @@ function AiTab({ settings }: { settings: Settings }) {
                 </div>
               ))}
             </div>
-            <Row label="Last 7 days" hint="Local estimates measured by Talorys.">
-              <p className="text-right text-sm tabular-nums text-fg-muted">
-                {usage.data.last_7_days.ai_requests} requests · {usage.data.last_7_days.ai_errors} errors
-              </p>
-            </Row>
+            <div className="grid gap-px bg-border md:grid-cols-2">
+              <div className="bg-surface px-5 py-4">
+                <h3 className="mb-3 text-sm font-medium">Today (UTC)</h3>
+                <UsageBreakdown counters={usage.data.today} />
+              </div>
+              <div className="bg-surface px-5 py-4">
+                <h3 className="mb-3 text-sm font-medium">Last 7 days</h3>
+                <p className="mb-3 text-xs tabular-nums text-fg-muted">
+                  {usage.data.last_7_days.ai_requests.toLocaleString()} chat-model requests · {usage.data.last_7_days.ai_errors.toLocaleString()} errors · {usage.data.last_7_days.tool_calls.toLocaleString()} tool calls · {usage.data.last_7_days.scheduled_ai_runs.toLocaleString()} scheduled AI runs
+                </p>
+                <UsageBreakdown counters={usage.data.last_7_days} />
+              </div>
+            </div>
             <div className="px-5 py-4 text-xs leading-5 text-fg-subtle">
               <Badge tone="warning" className="mb-2">
                 Estimates, not billing data
               </Badge>
-              <p>{usage.data.note}</p>
+              <UsagePricingNote data={usage.data} />
               <a href={usage.data.dashboard_url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 text-accent hover:underline">
                 Open Workers AI usage in the Cloudflare dashboard <ExternalLink className="h-3 w-3" />
               </a>

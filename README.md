@@ -161,10 +161,26 @@ paid features on its own. It is not "unlimited free", though:
 
 Built-in guardrails (adjustable in **Settings → AI**): max output tokens, max
 context tokens (older history is summarized), max tool calls and reasoning
-steps per request, max AI requests per day (every model call counts, including
-each reasoning step and history summary), and max scheduled AI runs per day.
-Simple reminders and task digests never use AI. The Usage panel shows local
-**estimates** and links to the Cloudflare dashboard for exact Neuron usage.
+steps per request, max AI requests per day (every chat-model call counts, including
+each reasoning step, history summary and memory check), and max scheduled AI runs
+per day. Embeddings have their own daily request cap. Simple reminders and task
+digests never use AI.
+
+The Usage panel separates **provider-reported tokens** from **fallback token
+estimates**, and shows local estimated Neurons and USD inference value for today
+and the last seven days. Model-specific estimates use static published Workers AI
+rates at the time each call is recorded; the pricing date and source are linked
+in the panel. They are **not a Cloudflare bill or quota balance**: account-wide
+usage and free allowances are excluded. No account credentials or extra network
+calls are needed for these estimates.
+
+Unsupported models remain unpriced, not free. Mixed coverage is labelled as a
+partial subtotal, while historical mixed token counts retain an unknown model
+and provenance and cannot be repriced. Demo/mock calls show estimated tokens but
+have no real AI consumption and no Neuron or USD estimate. Completed model steps
+remain counted if a later step fails or is cancelled; steps without a usage
+receipt cannot be measured. Use the linked Cloudflare dashboard for account-level
+usage and billing.
 
 ## 8. Local development
 

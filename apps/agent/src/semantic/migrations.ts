@@ -15,12 +15,7 @@ import { VECTOR_TABLE_V2, convertLegacyVectors, dropVectorCache } from "./vector
  */
 export const SEMANTIC_TRACK = "slim";
 
-/** An upstream migration plus an optional step run after its statements, in the same transaction. */
-export interface SemanticMigration extends Migration {
-  after?: (db: Database) => void;
-}
-
-export const SEMANTIC_MIGRATIONS: SemanticMigration[] = [
+export const SEMANTIC_MIGRATIONS: Migration[] = [
   {
     version: 1,
     name: "vectors and embedding usage",
@@ -53,7 +48,7 @@ export function semanticSchema(db: Database): { track: string; version: number }
  * Applies pending semantic migrations. Each migration runs in its own transaction
  * together with the version bump, so a failure leaves the previous version intact.
  */
-export function ensureSemanticSchema(db: Database, migrations: SemanticMigration[] = SEMANTIC_MIGRATIONS): number {
+export function ensureSemanticSchema(db: Database, migrations: Migration[] = SEMANTIC_MIGRATIONS): number {
   db.run(`CREATE TABLE IF NOT EXISTS tal_semantic_schema (id INTEGER PRIMARY KEY CHECK (id = 1), track TEXT NOT NULL,
     version INTEGER NOT NULL, updated_at TEXT NOT NULL)`);
   let version = semanticSchema(db)?.version ?? 0;

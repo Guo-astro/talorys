@@ -1,7 +1,8 @@
 import { generateText, streamText, type ToolSet } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 import type { AgentEvent, AIProvider, GenerateRequest, ToolRequest } from "./provider";
-import { classifyAiError } from "./provider";
+import { classifyAiError, withUsage } from "./provider";
+import { meteredBinding, stepUsage, type StepMeter } from "./workers-ai-usage";
 
 /**
  * Cloudflare Workers AI through the AI SDK's official Workers AI provider.
@@ -9,25 +10,25 @@ import { classifyAiError } from "./provider";
  */
 export class CloudflareWorkersAIProvider implements AIProvider {
   readonly id = "workers-ai";
-  private readonly workersai: ReturnType<typeof createWorkersAI>;
+  readonly billable = true;
 
   constructor(
-    binding: Ai,
-    private readonly modelId: string,
-  ) {
-    this.workersai = createWorkersAI({ binding });
-  }
+    private readonly binding: Ai,
+    readonly model: string,
+  ) {}
 
-  private model() {
-    return this.workersai(this.modelId as Parameters<typeof this.workersai>[0], {
+  private createModel(steps: StepMeter[]) {
+    const workersai = createWorkersAI({ binding: meteredBinding(this.binding, steps) });
+    return workersai(this.model as Parameters<typeof workersai>[0], {
       chat_template_kwargs: { enable_thinking: false },
     });
   }
 
   async generate(req: GenerateRequest) {
+    const steps: StepMeter[] = [];
     try {
       const result = await generateText({
-        model: this.model(),
+        model: this.createModel(steps),
         instructions: req.system,
         messages: req.messages,
         maxOutputTokens: req.maxOutputTokens,
@@ -38,10 +39,11 @@ export class CloudflareWorkersAIProvider implements AIProvider {
       });
       return {
         text: result.text,
-        usage: { inputTokens: result.usage.inputTokens ?? 0, outputTokens: result.usage.outputTokens ?? 0 },
+        usage: stepUsage(this.model, steps[0]!, result.text.length + (result.reasoningText?.length ?? 0)),
       };
     } catch (error) {
-      throw classifyAiError(error);
+      // A call that reached the binding is metered even when it fails (docs/architecture.md).
+      throw withUsage(classifyAiError(error), steps[0] && stepUsage(this.model, steps[0], 0));
     }
   }
 
@@ -60,8 +62,11 @@ export class CloudflareWorkersAIProvider implements AIProvider {
     }
     const hasTools = req.tools.length > 0;
     let streamError: unknown = null;
+    const steps: StepMeter[] = [];
+    let stepIndex = 0;
+    let stepOutputChars = 0;
     const result = streamText({
-      model: this.model(),
+      model: this.createModel(steps),
       instructions: req.system,
       messages: req.messages,
       maxOutputTokens: req.maxOutputTokens,
@@ -85,13 +90,19 @@ export class CloudflareWorkersAIProvider implements AIProvider {
       },
     });
 
+    let failure: unknown = null;
     try {
       for await (const part of result.fullStream) {
         switch (part.type) {
+          case "reasoning-delta":
+            stepOutputChars += part.text.length;
+            break;
           case "text-delta":
+            stepOutputChars += part.text.length;
             if (part.text) yield { type: "text", delta: part.text };
             break;
           case "tool-call":
+            stepOutputChars += JSON.stringify({ name: part.toolName, input: part.input }).length;
             yield { type: "tool-start", id: part.toolCallId, name: part.toolName, input: part.input };
             break;
           case "tool-result":
@@ -106,11 +117,11 @@ export class CloudflareWorkersAIProvider implements AIProvider {
               error: part.error instanceof Error ? part.error.message : String(part.error),
             };
             break;
-          case "finish":
-            yield {
-              type: "usage",
-              usage: { inputTokens: part.totalUsage.inputTokens ?? 0, outputTokens: part.totalUsage.outputTokens ?? 0 },
-            };
+          case "finish-step":
+            // An "error" step still ran: its prompt was processed and any received counts are kept.
+            if (steps[stepIndex]) yield { type: "usage", usage: stepUsage(this.model, steps[stepIndex]!, stepOutputChars) };
+            stepIndex++;
+            stepOutputChars = 0;
             break;
           case "error":
             throw part.error;
@@ -119,8 +130,15 @@ export class CloudflareWorkersAIProvider implements AIProvider {
         }
       }
     } catch (error) {
-      throw classifyAiError(error);
+      failure = error;
     }
-    if (streamError) throw classifyAiError(streamError);
+    failure ??= streamError;
+    // Every binding call that started and has no finish-step yet is metered before any error is
+    // rethrown: after a quiet abort, a stream error or a failed call (docs/architecture.md).
+    for (; stepIndex < steps.length; stepIndex++) {
+      yield { type: "usage", usage: stepUsage(this.model, steps[stepIndex]!, stepOutputChars) };
+      stepOutputChars = 0;
+    }
+    if (failure) throw classifyAiError(failure);
   }
 }

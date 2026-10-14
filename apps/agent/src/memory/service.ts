@@ -15,6 +15,7 @@ import {
   aiDismisses,
   type ClefRun,
   CLEF_TIMEOUT_MS,
+  clefUsage,
   classifyRelationship,
   type ConflictAssessment,
   decide,
@@ -287,8 +288,18 @@ export class MemoryHistoryService {
       onAbort = () => reject(effective.reason);
       effective.addEventListener("abort", onAbort, { once: true });
     });
+    // Recorded when the call settles, even after a timeout stopped the wait or the call failed.
+    const metered: ClefRun = async (request, callSignal) => {
+      let response: unknown;
+      try {
+        response = await run(request, callSignal);
+        return response;
+      } finally {
+        this.usage.record(clefUsage(request, response));
+      }
+    };
     try {
-      return await this.settleAiCheck(Promise.race([aiCheckSupersession(run, newer, older, effective), aborted]), signal);
+      return await this.settleAiCheck(Promise.race([aiCheckSupersession(metered, newer, older, effective), aborted]), signal);
     } finally {
       effective.removeEventListener("abort", onAbort);
     }

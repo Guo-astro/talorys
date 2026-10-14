@@ -421,13 +421,26 @@ export interface UsageReport {
   model: string;
   note: string;
   dashboard_url: string;
+  pricing: { as_of: string; source_url: string; usd_per_1000_neurons: number };
 }
 
 export interface UsageCounters {
   ai_requests: number;
-  input_tokens_estimate: number;
-  output_tokens_estimate: number;
+  input_tokens_reported: number;
+  output_tokens_reported: number;
+  input_tokens_estimated: number;
+  output_tokens_estimated: number;
+  /** Historical mixed counts: neither provenance nor model is recoverable. */
+  input_tokens_legacy: number;
+  output_tokens_legacy: number;
   tool_calls: number;
   scheduled_ai_runs: number;
   ai_errors: number;
+  embedding_requests: number;
+  /** Priced-call subtotal, before free allocation; null when nothing could be priced. */
+  neurons_estimate: number | null;
+  cost_usd_estimate: number | null;
+  priced_calls: number;
+  unpriced_calls: number;
+  mock_calls: number;
 }

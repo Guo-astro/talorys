@@ -5,6 +5,7 @@ import type { AppEnv } from "../app";
 import { body } from "../middleware";
 import { schemaVersion } from "../../db/migrations";
 import { exportData, importData } from "../../services/backup";
+import { WORKERS_AI_PRICING } from "../../ai/pricing";
 import { checkForUpdate } from "../../services/update-check";
 
 export const systemRoutes = new Hono<AppEnv>();
@@ -64,8 +65,9 @@ systemRoutes.get("/usage", (c) => {
     limits: settings.limits,
     model: settings.model,
     note:
-      "These numbers are estimates measured by Talorys itself (token counts reported by the model, or ~4 characters per token). Exact Workers AI Neuron usage and remaining free allocation are only available in the Cloudflare dashboard.",
+      "Local estimates for this app before Cloudflare's free allocation, not a bill. Tokens marked est. are ~4 characters per token. Embeddings have their own daily cap.",
     dashboard_url: "https://dash.cloudflare.com/?to=/:account/ai/workers-ai",
+    pricing: WORKERS_AI_PRICING,
   };
   return c.json(report);
 });

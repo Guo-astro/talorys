@@ -14,7 +14,9 @@ import {
   embeddingText,
   embeddingsToday,
   encodeVector,
+  recordEmbeddingCall,
   recordEmbeddings,
+  reserveEmbedding,
 } from "../src/semantic/embeddings";
 import { dropSemanticData, ensureSemanticSchema } from "../src/semantic/migrations";
 import type { Env } from "../src/env";
@@ -159,6 +161,58 @@ describe("semantic embeddings", () => {
       dropSemanticData(db);
       deleteSemanticConfig(settings);
       invalidateSemanticCache(a.services);
+    });
+  });
+
+  it("resets the semantic cap without erasing durable embedding history", async () => {
+    await inAgent(async (a) => {
+      const { db, usage, settings } = a.services;
+      dropSemanticData(db);
+      ensureSemanticSchema(db);
+      const day = new Date().toISOString().slice(0, 10);
+      const before = usage.today();
+      const embedder = new MockEmbedder();
+      try {
+        expect(reserveEmbedding(db, day, 10, 2)).toBe(true);
+        await embedder.embed(["abcdefgh"], (receipt) => {
+          recordEmbeddingCall(db, day, embedder, ["abcdefgh"], receipt);
+        });
+        expect(embeddingsToday(db, day)).toBe(1);
+        expect(db.one("SELECT embedded_tokens_estimate FROM tal_semantic_usage WHERE day = ?", day))
+          .toEqual({ embedded_tokens_estimate: 2 });
+        expect(usage.today()).toMatchObject({
+          embedding_requests: before.embedding_requests + 1,
+          input_tokens_estimated: before.input_tokens_estimated + 2,
+          mock_calls: before.mock_calls + 1,
+          ai_requests: before.ai_requests,
+        });
+
+        dropSemanticData(db);
+        ensureSemanticSchema(db);
+        expect(embeddingsToday(db, day)).toBe(0);
+        expect(usage.today()).toMatchObject({
+          embedding_requests: before.embedding_requests + 1,
+          input_tokens_estimated: before.input_tokens_estimated + 2,
+          mock_calls: before.mock_calls + 1,
+        });
+
+        expect(reserveEmbedding(db, day, 10, 3)).toBe(true);
+        await embedder.embed(["abcdefghijkl"]);
+        recordEmbeddingCall(db, day, embedder, ["abcdefghijkl"]);
+        expect(embeddingsToday(db, day)).toBe(1);
+        expect(db.one("SELECT embedded_tokens_estimate FROM tal_semantic_usage WHERE day = ?", day))
+          .toEqual({ embedded_tokens_estimate: 3 });
+        expect(usage.today()).toMatchObject({
+          embedding_requests: before.embedding_requests + 2,
+          input_tokens_estimated: before.input_tokens_estimated + 5,
+          mock_calls: before.mock_calls + 2,
+          ai_requests: before.ai_requests,
+        });
+      } finally {
+        dropSemanticData(db);
+        deleteSemanticConfig(settings);
+        invalidateSemanticCache(a.services);
+      }
     });
   });
 });

@@ -35,9 +35,11 @@ function freshAgent() {
 
 class RecordingProvider implements AIProvider {
   readonly id = "recording";
+  readonly model = "mock";
+  readonly billable = false;
   systems: string[] = [];
   async generate(_req: GenerateRequest) {
-    return { text: "summary", usage: { inputTokens: 1, outputTokens: 1 } };
+    return { text: "summary", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 1, estimated: 0 }, outputTokens: { reported: 1, estimated: 0 }, cachedInputTokens: 0 } };
   }
   async *stream(req: GenerateRequest): AsyncIterable<AgentEvent> {
     yield* this.generateWithTools({ ...req, tools: [], maxIterations: 1, toolBudgetExhausted: () => true });
@@ -45,7 +47,7 @@ class RecordingProvider implements AIProvider {
   async *generateWithTools(req: ToolRequest): AsyncIterable<AgentEvent> {
     this.systems.push(req.system);
     yield { type: "text", delta: "ok" };
-    yield { type: "usage", usage: { inputTokens: 1, outputTokens: 1 } };
+    yield { type: "usage", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 1, estimated: 0 }, outputTokens: { reported: 1, estimated: 0 }, cachedInputTokens: 0 } };
   }
 }
 
@@ -257,6 +259,7 @@ describe("conflict detection", () => {
       let fail = false;
       let calls = 0;
       const used = s.usage.today().ai_requests;
+      const pricedBefore = s.usage.today().priced_calls;
       s.memoryHistory.hooks.clef = () => async () => {
         calls++;
         if (fail) throw new Error("AI unavailable");
@@ -307,6 +310,8 @@ describe("conflict detection", () => {
       // Each Clef call reserves one AI request; with the day's budget spent Clef isn't called and
       // the rules decide as with the AI check off (their confident supersede becomes a review).
       expect(s.usage.today().ai_requests).toBe(used + 5);
+      // Every Clef call is metered as priced Clef input, the failed ones included.
+      expect(s.usage.today().priced_calls).toBe(pricedBefore + 5);
       s.settings.update({ limits: { ...s.settings.get().limits, maxAiRequestsPerDay: s.usage.today().ai_requests } });
       const { memory: scooter } = await s.memoryHistory.create({ content: "I ride a green scooter" });
       const r6 = await s.memoryHistory.create({ content: "I sold my green scooter" });
@@ -400,9 +405,10 @@ describe("migration from the previous schema", () => {
     const run = freshAgent();
     await run((agent, state) => {
       const db = new Database(state.storage);
-      // Rebuild the exact v3 shape: remove everything migration 4 added.
+      // Rebuild the v3 shape, removing tables and columns added by later migrations.
       for (const idx of ["tal_memories_status", "tal_memories_superseded_by"]) db.run(`DROP INDEX IF EXISTS ${idx}`);
       db.run(`DROP TABLE IF EXISTS tal_memory_reviews`);
+      db.run(`DROP TABLE tal_model_usage_daily`);
       for (const col of ["status", "superseded_by", "valid_from", "valid_until"]) db.run(`ALTER TABLE tal_memories DROP COLUMN ${col}`);
       // ...and what later migrations added.
       for (const col of ["target_version", "payload", "preview"]) db.run(`ALTER TABLE tal_pending_actions DROP COLUMN ${col}`);

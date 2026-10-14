@@ -10,7 +10,8 @@ test("chat usage popover supports keyboard, dismissal and settings @mobile", asy
   const popup = page.getByRole("dialog", { name: "AI usage today" });
   await expect(popup.getByRole("progressbar")).toBeVisible();
   await expect(popup).toContainText("Resets at 00:00 UTC");
-  await expect(popup).toContainText("Tokens (estimated)");
+  await expect(popup).toContainText("Tokens");
+  await expect(popup).toContainText("Est. cost");
   const bounds = await popup.boundingBox();
   expect(bounds?.x).toBeGreaterThanOrEqual(0);
   expect((bounds?.x ?? 0) + (bounds?.width ?? 0)).toBeLessThanOrEqual(page.viewportSize()!.width);

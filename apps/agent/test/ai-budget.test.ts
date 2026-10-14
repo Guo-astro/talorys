@@ -7,13 +7,15 @@ import type { Services } from "../src/services/container";
 /** Counts model calls. Each turn asks for up to `extraSteps` more steps, as a tool loop would. */
 class CountingProvider implements AIProvider {
   readonly id = "counting";
+  readonly model = "mock";
+  readonly billable = false;
   generateCalls = 0;
   turnCalls = 0;
   stepsGranted = 0;
   constructor(private readonly extraSteps = 0) {}
   async generate(_req: GenerateRequest) {
     this.generateCalls++;
-    return { text: "summary", usage: { inputTokens: 1, outputTokens: 1 } };
+    return { text: "summary", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 1, estimated: 0 }, outputTokens: { reported: 1, estimated: 0 }, cachedInputTokens: 0 } };
   }
   async *stream(req: GenerateRequest): AsyncIterable<AgentEvent> {
     yield* this.generateWithTools({ ...req, tools: [], maxIterations: 1, toolBudgetExhausted: () => true });
@@ -91,9 +93,12 @@ describe("daily AI budget", () => {
   it("checks the budget again before scheduled steps", async () => {
     await withRemaining(2, async (s) => {
       const looping = new CountingProvider(10);
+      const before = s.usage.today();
       await new AgentRunner(s, looping).runScheduledPrompt("check in");
       expect(looping.stepsGranted).toBe(1);
       expect(s.usage.canUseAi(s.settings.get().limits)).toBe(false);
+      const after = s.usage.today();
+      expect(after.scheduled_ai_runs - before.scheduled_ai_runs).toBe(1);
     });
   });
 });

@@ -13,11 +13,13 @@ import {
 import {
   EMBEDDING_DIMS,
   type Embedder,
+  MeteredEmbedder,
   MockEmbedder,
   contentHash,
   embeddingText,
   embeddingsToday,
   encodeVector,
+  WorkersAiEmbedder,
 } from "../src/semantic/embeddings";
 import { pendingMemories, runIndexer } from "../src/semantic/indexer";
 import { dropSemanticData, ensureSemanticSchema } from "../src/semantic/migrations";
@@ -74,7 +76,8 @@ function context(a: TalorysAgent, patch: ContextPatch = {}, embedder: Embedder |
   const ctx: SemanticContext = {
     db: s.db,
     services: s,
-    embedder,
+    // Metered as createSemanticContext does; `embed` above still spies on the inner embedder.
+    embedder: embedder && new MeteredEmbedder(s.db, embedder),
     config: {
       ...DEFAULT_SEMANTIC_CONFIG,
       enabled: true,
@@ -296,6 +299,37 @@ describe("hybridSearch", () => {
       }
     });
   });
+
+  for (const reported of [undefined, 200]) {
+    it(`prices ${reported === undefined ? "estimated" : "reported"} query input when embedding fails`, async () => {
+      await inAgent(async (a) => {
+        const model = "@cf/baai/bge-m3";
+        // The embedder only calls run; these failures never reach a remote binding.
+        const ai = { run: async () => {
+          if (reported === undefined) throw new Error("AI quota exhausted");
+          return { data: [[]], usage: { prompt_tokens: reported } };
+        } } as unknown as Ai;
+        const embedder = new WorkersAiEmbedder(ai, model);
+        const { ctx, s } = context(a, { model }, embedder);
+        const memory = s.memories.create({ content: "Allergic to peanuts", category: "fact" });
+        const before = s.usage.today();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const hits = await hybridSearch(ctx, "peanuts", { limit: 10 });
+          expect(hits.map((hit) => [hit.memory.id, hit.cosine])).toEqual([[memory.id, null]]);
+          const after = s.usage.today();
+          expect(after.embedding_requests - before.embedding_requests).toBe(1);
+          expect(after.ai_requests).toBe(before.ai_requests);
+          expect(after.input_tokens_reported - before.input_tokens_reported).toBe(reported ?? 0);
+          expect(after.input_tokens_estimated - before.input_tokens_estimated).toBe(reported === undefined ? 2 : 0);
+          expect(after.priced_calls - before.priced_calls).toBe(1);
+          expect((after.neurons_estimate ?? 0) - (before.neurons_estimate ?? 0)).toBeCloseTo(reported === undefined ? 0.00215 : 0.215, 10);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    });
+  }
 
   it("counts the query embedding against the daily cap", async () => {
     await inAgent(async (a) => {
@@ -747,9 +781,11 @@ function assertBlock(c: GoldenCase, memories: GoldenCase["memories"], lines: str
 /** A provider that records each request and replies with fixed text. */
 class RecordingProvider implements AIProvider {
   readonly id = "recording";
+  readonly model = "mock";
+  readonly billable = false;
   calls: ToolRequest[] = [];
   async generate(_req: GenerateRequest) {
-    return { text: "summary", usage: { inputTokens: 1, outputTokens: 1 } };
+    return { text: "summary", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 1, estimated: 0 }, outputTokens: { reported: 1, estimated: 0 }, cachedInputTokens: 0 } };
   }
   async *stream(req: GenerateRequest): AsyncIterable<AgentEvent> {
     yield* this.generateWithTools({ ...req, tools: [], maxIterations: 1, toolBudgetExhausted: () => true });
@@ -757,7 +793,7 @@ class RecordingProvider implements AIProvider {
   async *generateWithTools(req: ToolRequest): AsyncIterable<AgentEvent> {
     this.calls.push(req);
     yield { type: "text", delta: "Hello." };
-    yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5 } };
+    yield { type: "usage", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 10, estimated: 0 }, outputTokens: { reported: 5, estimated: 0 }, cachedInputTokens: 0 } };
   }
 }
 
@@ -904,6 +940,19 @@ describe("PR #22 review", () => {
       }
       expect(embeddingsToday(s.db, day)).toBe(before + 1);
       expect((await pendingMemories(s.db, ctx.embedder!.model)).length).toBeGreaterThanOrEqual(60);
+    });
+  });
+
+  it("finding neighbors meters its embed in the usage history, matching the cap counter", async () => {
+    await inAgent(async (a) => {
+      const { s } = enabled(a);
+      const saved = s.memories.create({ content: "I live in Lisbon", category: "fact" });
+      const day = UsageService.day();
+      const cap = embeddingsToday(s.db, day);
+      const ledger = s.usage.today().embedding_requests;
+      await semanticNeighbors(s, workerEnv, saved, options());
+      expect(embeddingsToday(s.db, day)).toBe(cap + 1);
+      expect(s.usage.today().embedding_requests).toBe(ledger + 1);
     });
   });
 

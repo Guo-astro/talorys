@@ -14,9 +14,19 @@ export interface GenerateRequest {
   signal?: AbortSignal;
 }
 
+export interface TokenUsage {
+  reported: number;
+  estimated: number;
+}
+
+/** Additive usage for one model step, never a cumulative turn total. */
 export interface Usage {
-  inputTokens: number;
-  outputTokens: number;
+  model: string;
+  billable: boolean;
+  inputTokens: TokenUsage;
+  outputTokens: TokenUsage;
+  /** Cache reads are a subset of reported input tokens, not additional tokens. */
+  cachedInputTokens: number;
 }
 
 /** A tool as seen by a provider. Execution limits are enforced by the caller-supplied `execute`. */
@@ -52,14 +62,46 @@ export type AgentEvent =
  */
 export interface AIProvider {
   readonly id: string;
+  readonly model: string;
+  readonly billable: boolean;
   generate(req: GenerateRequest): Promise<{ text: string; usage: Usage }>;
   stream(req: GenerateRequest): AsyncIterable<AgentEvent>;
   generateWithTools(req: ToolRequest): AsyncIterable<AgentEvent>;
 }
 
-/** Rough token estimate (≈4 chars/token) used for budgeting and local usage estimates. */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+/** Rough token estimate (≈4 chars/token) from text or an accumulated character count. */
+export function estimateTokens(text: string | number): number {
+  return Math.ceil((typeof text === "number" ? text : text.length) / 4);
+}
+
+/** A provider-reported token count, or undefined unless it is a non-negative safe integer. */
+export function tokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+export function tokens(reported: number | undefined, estimate: number): TokenUsage {
+  return reported === undefined ? { reported: 0, estimated: estimate } : { reported, estimated: 0 };
+}
+
+const failedCallUsage = new WeakMap<object, Usage>();
+
+/** Attaches what a failed `generate()` call consumed, so its caller can record it. */
+export function withUsage<E extends Error>(error: E, usage: Usage | undefined): E {
+  if (usage) failedCallUsage.set(error, usage);
+  return error;
+}
+
+/** Usage attached to a failed call by `withUsage`, if any. */
+export function usageOfFailure(error: unknown): Usage | undefined {
+  return typeof error === "object" && error !== null ? failedCallUsage.get(error) : undefined;
+}
+
+export function modelUsage(model: string, billable: boolean, inputTokens: TokenUsage, outputTokens = tokens(0, 0), cachedInputTokens = 0): Usage {
+  return { model, billable, inputTokens, outputTokens, cachedInputTokens: Math.min(cachedInputTokens, inputTokens.reported) };
+}
+
+export function estimatedUsage(provider: Pick<AIProvider, "model" | "billable">, input: string | number, output: string | number): Usage {
+  return modelUsage(provider.model, provider.billable, tokens(undefined, estimateTokens(input)), tokens(undefined, estimateTokens(output)));
 }
 
 /**

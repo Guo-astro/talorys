@@ -1,5 +1,5 @@
 import type { AgentEvent, AIProvider, GenerateRequest, ToolRequest } from "./provider";
-import { estimateTokens } from "./provider";
+import { estimatedUsage } from "./provider";
 
 /**
  * Deterministic provider for local development, automated tests and the
@@ -9,13 +9,15 @@ import { estimateTokens } from "./provider";
  */
 export class MockAIProvider implements AIProvider {
   readonly id = "mock";
+  readonly model = "mock";
+  readonly billable = false;
 
   constructor(private readonly chunkDelayMs = 25) {}
 
   async generate(req: GenerateRequest) {
     const last = req.messages.at(-1)?.content ?? "";
     const text = `Summary: ${last.slice(0, 200)}`;
-    return { text, usage: { inputTokens: estimateTokens(req.system + last), outputTokens: estimateTokens(text) } };
+    return { text, usage: estimatedUsage(this, req.system.length + JSON.stringify(req.messages).length, text.length) };
   }
 
   async *stream(req: GenerateRequest): AsyncIterable<AgentEvent> {
@@ -47,15 +49,17 @@ export class MockAIProvider implements AIProvider {
     if (!reply) {
       reply = `(Demo mode) You said: "${input.slice(0, 500)}". Connect Workers AI for real answers — tasks, notes, memories and reminders work either way.`;
     }
+    let outputChars = 0;
     for (const chunk of reply.match(/\S+\s*/g) ?? [reply]) {
-      if (req.signal?.aborted) return;
+      if (req.signal?.aborted) break;
+      outputChars += chunk.length;
       yield { type: "text", delta: chunk };
       // Paces output like a real model so streaming paths are exercised.
       await new Promise((r) => setTimeout(r, this.chunkDelayMs));
     }
     yield {
       type: "usage",
-      usage: { inputTokens: estimateTokens(req.system + input), outputTokens: estimateTokens(reply) },
+      usage: estimatedUsage(this, req.system.length + JSON.stringify(req.messages).length, outputChars),
     };
   }
 }

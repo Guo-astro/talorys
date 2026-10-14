@@ -1,6 +1,8 @@
 import type { Env } from "../env";
 import type { Database } from "../db/database";
 import type { SettingsService } from "../services/settings";
+import { estimateTokens, modelUsage, tokenCount, tokens, type Usage } from "../ai/provider";
+import { UsageService } from "../services/usage";
 
 /** Dimensions of the mock embedder's vectors. */
 export const EMBEDDING_DIMS = 384;
@@ -16,7 +18,13 @@ export const MODEL_DIMS: Record<string, number> = {
 export interface Embedder {
   readonly model: string;
   readonly dims: number;
-  embed(texts: string[]): Promise<Float32Array[]>;
+  /** False for a local mock; custom embedders default to potentially billable. */
+  readonly billable?: boolean;
+  embed(texts: string[], onUsage?: (usage: Usage) => void): Promise<Float32Array[]>;
+}
+
+function estimatedEmbeddingTokens(texts: string[]): number {
+  return texts.reduce((total, text) => total + estimateTokens(text), 0);
 }
 
 /**
@@ -26,6 +34,7 @@ export interface Embedder {
  */
 export class WorkersAiEmbedder implements Embedder {
   private size: number;
+  readonly billable = true;
 
   constructor(
     private readonly ai: Ai,
@@ -38,9 +47,14 @@ export class WorkersAiEmbedder implements Embedder {
     return this.size;
   }
 
-  async embed(texts: string[]): Promise<Float32Array[]> {
+  async embed(texts: string[], onUsage?: (usage: Usage) => void): Promise<Float32Array[]> {
     if (texts.length === 0) return [];
-    const result = (await this.ai.run(this.model as "@cf/baai/bge-small-en-v1.5", { text: texts })) as { data?: unknown };
+    const result = (await this.ai.run(this.model as "@cf/baai/bge-small-en-v1.5", { text: texts })) as {
+      data?: unknown;
+      usage?: { prompt_tokens?: unknown; input_tokens?: unknown; total_tokens?: unknown };
+    };
+    const reported = tokenCount(result?.usage?.prompt_tokens ?? result?.usage?.input_tokens ?? result?.usage?.total_tokens);
+    onUsage?.(modelUsage(this.model, this.billable, tokens(reported, estimatedEmbeddingTokens(texts))));
     const data = result?.data;
     if (!Array.isArray(data) || data.length !== texts.length) {
       throw new Error(`Embedding response had ${Array.isArray(data) ? data.length : "no"} vectors for ${texts.length} texts`);
@@ -83,8 +97,11 @@ function fnv1a32(s: string): number {
 export class MockEmbedder implements Embedder {
   readonly model = "mock-bge-384";
   readonly dims = EMBEDDING_DIMS;
+  readonly billable = false;
 
-  async embed(texts: string[]): Promise<Float32Array[]> {
+  async embed(texts: string[], onUsage?: (usage: Usage) => void): Promise<Float32Array[]> {
+    if (texts.length > 0) onUsage?.(modelUsage(this.model, this.billable,
+      tokens(undefined, estimatedEmbeddingTokens(texts))));
     return texts.map((t) => this.vector(t));
   }
 
@@ -187,4 +204,52 @@ export function recordEmbeddings(db: Database, day: string, requests: number, to
     Math.round(requests),
     Math.round(tokens),
   );
+}
+
+/**
+ * Records one finished (or failed) embedding call in the durable model usage history. The
+ * resettable semantic cap was already counted by `reserveEmbedding` before the call.
+ */
+export function recordEmbeddingCall(db: Database, day: string, embedder: Embedder, texts: string[], usage?: Usage): void {
+  new UsageService(db).record(usage ?? modelUsage(embedder.model, embedder.billable !== false,
+    tokens(undefined, estimatedEmbeddingTokens(texts))), day, "embedding");
+}
+
+/**
+ * Wraps `embedder` so every call, finished or failed, lands in the durable usage history, the way
+ * `meteredBinding` does for chat: callers cannot forget to meter. The semantic cap stays with the
+ * callers, which reserve it with `reserveEmbedding` before embedding.
+ */
+export class MeteredEmbedder implements Embedder {
+  constructor(
+    private readonly db: Database,
+    readonly inner: Embedder,
+  ) {}
+
+  get model(): string {
+    return this.inner.model;
+  }
+
+  /** Read through: a Workers AI model missing from MODEL_DIMS learns its size on the first call. */
+  get dims(): number {
+    return this.inner.dims;
+  }
+
+  get billable(): boolean | undefined {
+    return this.inner.billable;
+  }
+
+  async embed(texts: string[], onUsage?: (usage: Usage) => void): Promise<Float32Array[]> {
+    if (texts.length === 0) return this.inner.embed(texts, onUsage);
+    let usage: Usage | undefined;
+    try {
+      return await this.inner.embed(texts, (reported) => {
+        usage = reported;
+        onUsage?.(reported);
+      });
+    } finally {
+      // Attempted input remains an estimate when a failed call returned no usage.
+      recordEmbeddingCall(this.db, UsageService.day(), this.inner, texts, usage);
+    }
+  }
 }

@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatStreamEvent, PendingAction, ToolActivity } from "@talorys/shared";
 import type { Services } from "../services/container";
-import { type AIProvider, classifyAiError, estimateTokens, type ProviderTool } from "../ai/provider";
+import { type AIProvider, classifyAiError, estimateTokens, type ProviderTool, usageOfFailure } from "../ai/provider";
 import { AppError, NotFoundError } from "../api/errors";
 import { ALL_TOOLS, ToolExecutor, type ToolDefinition } from "../tools";
 import { buildSystemPrompt } from "./prompt";
@@ -31,6 +31,15 @@ function toolLabel(tool: ToolDefinition | undefined, name: string, input: unknow
   } catch {
     return name;
   }
+}
+
+function toProviderTools(executor: ToolExecutor): ProviderTool[] {
+  return executor.available().map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.input,
+    execute: (input, callId) => executor.execute(tool.name, input, callId),
+  }));
 }
 
 const APPROVAL_OUTCOME: Record<PendingAction["status"], string> = {
@@ -133,12 +142,14 @@ export class AgentRunner {
             temperature: 0.2,
             signal: input.signal,
           });
+          s.usage.record(result.usage);
           summary = result.text.trim().slice(0, 2000);
           summaryUpto = window.overflow.at(-1)!.created_at;
           s.conversations.setSummary(conversation.id, summary, summaryUpto);
-          s.usage.increment({ input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens });
           window = buildContextWindow(history, historyBudget, summaryUpto);
         } catch (error) {
+          const usage = usageOfFailure(error);
+          if (usage) s.usage.record(usage);
           console.warn("Summarization skipped", error);
         }
       }
@@ -160,16 +171,10 @@ export class AgentRunner {
         { services: s, timezone: settings.timezone, mode: "chat", conversationId: conversation.id },
         { maxToolCalls: limits.maxToolCalls },
       );
-      const providerTools: ProviderTool[] = executor.available().map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.input,
-        execute: (toolInput, callId) => executor.execute(t.name, toolInput, callId),
-      }));
+      const providerTools = toProviderTools(executor);
 
       // Memory selection and summarizing may have spent budget since the first check.
       if (!s.usage.reserveAi(limits)) throw aiLimitReached(limits.maxAiRequestsPerDay);
-      let usageRecorded = false;
       for await (const event of this.provider.generateWithTools({
         system,
         messages: window.messages,
@@ -203,12 +208,8 @@ export class AgentRunner {
             yield { type: "tool", tool: { ...activity } };
           }
         } else if (event.type === "usage") {
-          usageRecorded = true;
-          s.usage.increment({ input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens });
+          s.usage.record(event.usage);
         }
-      }
-      if (!usageRecorded) {
-        s.usage.increment({ input_tokens: estimateTokens(system) + window.messages.reduce((n, m) => n + estimateTokens(m.content), 0), output_tokens: estimateTokens(text) });
       }
       s.usage.increment({ tool_calls: executor.callCount });
 
@@ -254,6 +255,7 @@ export class AgentRunner {
       ),
       scheduled: true,
     });
+    const providerTools = toProviderTools(executor);
     let text = "";
     // Reserved after the awaits above, so a run started just before the budget ran out cannot overrun it.
     if (!s.usage.reserveScheduledAi(settings.limits)) throw aiLimitReached(settings.limits.maxAiRequestsPerDay);
@@ -261,12 +263,7 @@ export class AgentRunner {
       for await (const event of this.provider.generateWithTools({
         system,
         messages: [{ role: "user", content: prompt }],
-        tools: executor.available().map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.input,
-          execute: (i) => executor.execute(t.name, i),
-        })),
+        tools: providerTools,
         maxIterations: Math.min(settings.limits.maxAgentIterations, 3),
         maxOutputTokens: Math.min(settings.limits.maxOutputTokens, 600),
         temperature: settings.temperature,
@@ -275,7 +272,9 @@ export class AgentRunner {
         signal,
       })) {
         if (event.type === "text") text += event.delta;
-        if (event.type === "usage") s.usage.increment({ input_tokens: event.usage.inputTokens, output_tokens: event.usage.outputTokens });
+        if (event.type === "usage") {
+          s.usage.record(event.usage);
+        }
       }
     } catch (error) {
       s.usage.increment({ ai_errors: 1 });

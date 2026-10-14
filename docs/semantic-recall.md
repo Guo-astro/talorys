@@ -171,6 +171,17 @@ Each query and each batch of memories counts toward the cap, before the call is
 made, so concurrent requests cannot overrun it. When it is spent,
 recall uses keyword search until the next day.
 
+Embedding requests and their tokens contribute to the same local Usage display
+as chats, summaries, scheduled runs and memory checks, but remain separate from
+the chat-model daily request cap.
+The lazy semantic table tracks the resettable cap; the core model ledger keeps
+durable usage history. Deleting semantic data resets the cap, not usage history.
+Historical embedding token estimates are preserved but remain unpriced because
+their model is unknown. If an embedding attempt returns no usage, its input is
+estimated even when it fails; reported usage is retained before vector validation.
+See [usage accounting](architecture.md#ai-provider-abstraction) for token provenance,
+model-specific pricing, coverage and billing limitations.
+
 ## Forget
 
 Forgetting is real. Deleting a memory from the Memory page, approving a

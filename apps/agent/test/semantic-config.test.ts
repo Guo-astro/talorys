@@ -254,9 +254,11 @@ describe("semantic config", () => {
 /** A provider that records each request and replies with fixed text. */
 class RecordingProvider implements AIProvider {
   readonly id = "recording";
+  readonly model = "mock";
+  readonly billable = false;
   calls: ToolRequest[] = [];
   async generate(_req: GenerateRequest) {
-    return { text: "summary", usage: { inputTokens: 1, outputTokens: 1 } };
+    return { text: "summary", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 1, estimated: 0 }, outputTokens: { reported: 1, estimated: 0 }, cachedInputTokens: 0 } };
   }
   async *stream(req: GenerateRequest): AsyncIterable<AgentEvent> {
     yield* this.generateWithTools({ ...req, tools: [], maxIterations: 1, toolBudgetExhausted: () => true });
@@ -264,7 +266,7 @@ class RecordingProvider implements AIProvider {
   async *generateWithTools(req: ToolRequest): AsyncIterable<AgentEvent> {
     this.calls.push(req);
     yield { type: "text", delta: "Hello." };
-    yield { type: "usage", usage: { inputTokens: 10, outputTokens: 5 } };
+    yield { type: "usage", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 10, estimated: 0 }, outputTokens: { reported: 5, estimated: 0 }, cachedInputTokens: 0 } };
   }
 }
 

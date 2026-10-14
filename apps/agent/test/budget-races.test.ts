@@ -32,9 +32,11 @@ class SlowEmbedder extends MockEmbedder {
 
 class CountingProvider implements AIProvider {
   readonly id = "counting";
+  readonly model = "mock";
+  readonly billable = false;
   turnCalls = 0;
   async generate() {
-    return { text: "", usage: { inputTokens: 0, outputTokens: 0 } };
+    return { text: "", usage: { model: this.model, billable: this.billable, inputTokens: { reported: 0, estimated: 0 }, outputTokens: { reported: 0, estimated: 0 }, cachedInputTokens: 0 } };
   }
   async *stream(): AsyncIterable<AgentEvent> {}
   async *generateWithTools(_req: ToolRequest): AsyncIterable<AgentEvent> {
