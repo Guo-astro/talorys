@@ -94,8 +94,7 @@ export async function body<S extends z.ZodType>(c: Context<AppEnv>, schema: S, m
   if (length > maxBytes) throw new ValidationError("Request body too large.");
   let raw: unknown;
   try {
-    const text = await c.req.text();
-    if (text.length > maxBytes) throw new ValidationError("Request body too large.");
+    const text = await readLimited(c.req.raw, maxBytes);
     raw = text ? JSON.parse(text) : {};
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -104,6 +103,34 @@ export async function body<S extends z.ZodType>(c: Context<AppEnv>, schema: S, m
   const parsed = schema.safeParse(raw);
   if (!parsed.success) throw ValidationError.fromZod(parsed.error);
   return parsed.data;
+}
+
+/**
+ * Reads a body as UTF-8, counting bytes as they arrive and cancelling once past the limit.
+ * Content-Length alone is not enough: a streamed body has none and would be read in full.
+ */
+async function readLimited(request: Request, maxBytes: number): Promise<string> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new ValidationError("Request body too large.");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 export function query<S extends z.ZodType>(c: Context<AppEnv>, schema: S): z.infer<S> {

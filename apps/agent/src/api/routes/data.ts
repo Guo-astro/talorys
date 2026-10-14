@@ -125,13 +125,19 @@ dataRoutes.post("/memories/:id/correct", async (c) => {
 
 // ---------- Notes ----------
 
+/**
+ * Body limits count bytes, the note schema counts characters (200,000). One character can take up to
+ * 6 bytes in JSON (a \u escape; a CJK character is 3, an emoji 4 for its two), plus room for the other fields.
+ */
+const NOTE_BODY_BYTES = 200_000 * 6 + 16 * 1024;
+
 dataRoutes.get("/notes", (c) => {
   const q = query(c, z.object({ q: z.string().max(200).optional(), project_id: z.string().max(64).optional() }));
   return c.json({ notes: c.env.agent.services.notes.list(q) });
 });
 
 dataRoutes.post("/notes", async (c) => {
-  const input = await body(c, noteCreateSchema, 512 * 1024);
+  const input = await body(c, noteCreateSchema, NOTE_BODY_BYTES);
   assertProject(c, input.project_id);
   return c.json({ note: c.env.agent.services.notes.create(input) }, 201);
 });
@@ -139,7 +145,7 @@ dataRoutes.post("/notes", async (c) => {
 dataRoutes.get("/notes/:id", (c) => c.json({ note: c.env.agent.services.notes.require(c.req.param("id")) }));
 
 dataRoutes.patch("/notes/:id", async (c) => {
-  const patch = await body(c, noteUpdateSchema, 512 * 1024);
+  const patch = await body(c, noteUpdateSchema, NOTE_BODY_BYTES);
   assertProject(c, patch.project_id);
   return c.json({ note: c.env.agent.services.notes.update(c.req.param("id"), patch) });
 });
