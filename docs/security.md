@@ -26,9 +26,13 @@ Talorys is single-user. The threat model assumes the internet can reach your
 
 ## Brute force
 
-5 failed logins per client IP (`CF-Connecting-IP`) within 15 minutes lock that
-client; 25 failures overall lock login globally for the window. Responses
-include `Retry-After`. Password changes are subject to the same limiter.
+5 failed logins per client within 15 minutes lock that client. A client is the
+IP address from `CF-Connecting-IP`, or its whole /64 for IPv6, since one
+subscriber usually holds a /64 and could otherwise rotate addresses. 25 failures
+overall lock login globally for the window, except for networks that signed in
+successfully within the last 30 days, so a distributed attack cannot lock the
+owner out of their usual networks (their per-client limit still applies).
+Responses include `Retry-After`. Password changes are subject to the same limiter.
 
 ## CSRF
 

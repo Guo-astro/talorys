@@ -114,5 +114,23 @@ export function query<S extends z.ZodType>(c: Context<AppEnv>, schema: S): z.inf
 
 export function clientId(c: Context<AppEnv>): string {
   // Set by Cloudflare's edge and not spoofable by clients; absent only in local development.
-  return c.req.header("cf-connecting-ip") ?? "local";
+  return clientKey(c.req.header("cf-connecting-ip") ?? "local");
+}
+
+/**
+ * Rate-limit key for a client IP. IPv6 is grouped by /64: one subscriber usually holds a
+ * whole /64 and could otherwise rotate addresses for a fresh allowance on every guess.
+ */
+export function clientKey(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const addr = ip.toLowerCase().split("%")[0]!;
+  // IPv4-mapped (::ffff:192.0.2.1) stays per IPv4 address.
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(addr);
+  if (mapped) return mapped[1]!;
+  const [head = "", tail = ""] = addr.split("::");
+  const left = head ? head.split(":") : [];
+  const right = addr.includes("::") && tail ? tail.split(":") : [];
+  const zeros = addr.includes("::") ? Array(Math.max(0, 8 - left.length - right.length)).fill("0") : [];
+  const groups = [...left, ...zeros, ...right];
+  return `${groups.slice(0, 4).map((g) => (Number.parseInt(g, 16) || 0).toString(16)).join(":")}::/64`;
 }

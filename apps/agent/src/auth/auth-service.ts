@@ -20,6 +20,8 @@ const TOUCH_INTERVAL_MS = 5 * 60_000;
 export const LOGIN_WINDOW_MS = 15 * 60_000;
 export const MAX_FAILURES_PER_CLIENT = 5;
 export const MAX_FAILURES_GLOBAL = 25;
+/** A network with a successful sign-in this recent is the owner's, and exempt from the global cap. */
+export const TRUSTED_CLIENT_MS = 30 * 24 * 3600_000;
 
 const OVERRIDE_KEY = "auth.password_override";
 const FINGERPRINT_KEY = "auth.secret_fingerprint";
@@ -120,10 +122,23 @@ export class AuthService {
     return row?.n ?? 0;
   }
 
-  /** Throws RATE_LIMITED when the client (or everyone, under distributed attack) has too many recent failures. */
+  /** True when this client signed in successfully within TRUSTED_CLIENT_MS: one of the owner's own networks. */
+  private isTrustedClient(client: string): boolean {
+    const since = Date.now() - TRUSTED_CLIENT_MS;
+    return !!this.db.one(`SELECT 1 AS x FROM tal_login_attempts WHERE success = 1 AND client = ? AND at > ? LIMIT 1`, client, since);
+  }
+
+  /**
+   * Throws RATE_LIMITED when the client has too many recent failures, or when a distributed
+   * attack has tripped the global cap. The owner's recent networks are exempt from the global
+   * cap only, so strangers cannot lock the owner out; their per-client limit still applies.
+   */
   assertLoginAllowed(client: string): void {
-    this.db.run(`DELETE FROM tal_login_attempts WHERE at < ?`, Date.now() - 24 * 3600_000);
-    if (this.recentFailures(client) >= MAX_FAILURES_PER_CLIENT || this.recentFailures() >= MAX_FAILURES_GLOBAL) {
+    const nowMs = Date.now();
+    // Failures matter for a day; successes are kept as long as they mark a trusted network.
+    this.db.run(`DELETE FROM tal_login_attempts WHERE (success = 0 AND at < ?) OR at < ?`, nowMs - 24 * 3600_000, nowMs - TRUSTED_CLIENT_MS);
+    const clientBlocked = this.recentFailures(client) >= MAX_FAILURES_PER_CLIENT;
+    if (clientBlocked || (this.recentFailures() >= MAX_FAILURES_GLOBAL && !this.isTrustedClient(client))) {
       const oldest = this.db.one<{ at: number }>(
         `SELECT min(at) AS at FROM tal_login_attempts WHERE success = 0 AND at > ?`,
         Date.now() - LOGIN_WINDOW_MS,
