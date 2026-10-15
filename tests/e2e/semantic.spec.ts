@@ -25,7 +25,7 @@ test.describe("Semantic recall", () => {
     await openAiSettings(page);
     const toggle = page.getByRole("switch", { name: "Semantic memory recall" });
     await expect(toggle).toHaveAttribute("aria-checked", "false");
-    await expect(page.getByText("Finds memories by meaning using Workers AI embeddings, up to 500 per day. Off by default.")).toBeVisible();
+    await expect(page.getByText("Finds memories, tasks, notes and reminders by meaning using Workers AI embeddings. Memories use up to 500 embeddings per day; tasks, notes and reminders have their own 50 per day. Off by default.")).toBeVisible();
     await expect(page.getByLabel("Semantic recall status")).toHaveCount(0);
 
     await toggle.click();
@@ -73,5 +73,36 @@ test.describe("Semantic recall", () => {
 
     const memories = await (await page.request.get(`/api/memories?q=${encodeURIComponent(content)}`)).json();
     expect(memories.memories.map((m: { content: string }) => m.content)).toContain(content);
+  });
+
+  test("search finds a Tasks-page task by meaning once items are indexed", async ({ page }) => {
+    const title = `Water the plants ${Date.now()}`;
+    await login(page);
+    expect((await page.request.delete("/api/semantic/data", { headers: CSRF, data: { confirm: "DELETE" } })).status()).toBe(200);
+
+    await openAiSettings(page);
+    const toggle = page.getByRole("switch", { name: "Semantic memory recall" });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    await page.getByRole("link", { name: "Tasks" }).first().click();
+    await page.getByLabel("New task title").fill(title);
+    await page.getByRole("button", { name: "Add task" }).click();
+    await expect(page.getByText(title)).toBeVisible();
+
+    await openAiSettings(page);
+    await expect(page.locator('[data-stat="Items pending"]')).toHaveText("0", { timeout: 20_000 });
+
+    // The mock chat AI routes "search ..." to the search tool and prints its JSON output.
+    await page.goto("/chat");
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill("search botany");
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(title)).toBeVisible();
+
+    expect((await page.request.delete("/api/semantic/data", { headers: CSRF, data: { confirm: "DELETE" } })).status()).toBe(200);
+    const tasks = await (await page.request.get(`/api/tasks?q=${encodeURIComponent(title)}`)).json();
+    for (const task of tasks.tasks) {
+      expect((await page.request.delete(`/api/tasks/${task.id}`, { headers: CSRF })).ok()).toBe(true);
+    }
   });
 });

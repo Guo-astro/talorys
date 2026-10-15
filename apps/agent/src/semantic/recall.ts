@@ -1,12 +1,13 @@
 import type { Memory } from "@talorys/shared";
 import type { Env } from "../env";
-import { estimateTokens } from "../ai/provider";
+import { type Usage, estimateTokens } from "../ai/provider";
 import type { Services } from "../services/container";
 import { UsageService } from "../services/usage";
 import type { SemanticConfig } from "./config";
-import { MODEL_DIMS, MeteredEmbedder, createEmbedder, reserveEmbedding } from "./embeddings";
+import { MODEL_DIMS, MeteredEmbedder, conservativeEmbeddingTokens, createEmbedder, reserveEmbedding } from "./embeddings";
 import { type IndexerContext, runIndexer } from "./indexer";
 import { ensureSemanticSchema } from "./migrations";
+import { correctItemTokens, itemCaps, reserveItemEmbedding } from "./itemIndex";
 import { cachedVectors, dot, normalize } from "./vectorStore";
 import { hasHistoricalIntent } from "../memory/intent";
 
@@ -43,11 +44,44 @@ export const MAX_NEWER_PER_HIT = 2;
 /** Everything one recall needs: the indexer context plus the owner's services. */
 export interface SemanticContext extends IndexerContext {
   services: Services;
+  /**
+   * Query vectors embedded in this turn by `queryKey`; until one is embedded, the caps whose
+   * embed already failed or was capped for that query.
+   */
+  queryVectors?: Map<string, QueryVectorEntry>;
+  /** The owner message (or scheduled prompt) of this turn, set when memory recall runs for it. */
+  turnQuery?: string;
+  /** Keeps background work alive after the turn returns (the Durable Object's waitUntil). */
+  waitUntil?: (work: Promise<unknown>) => void;
 }
 
-export function createSemanticContext(services: Services, env: Env, config: SemanticConfig): SemanticContext {
+/** Which daily cap pays for a query embedding: memory recall's or the task, note and automation one. */
+export type QueryCap = "memory" | "item";
+
+export interface QueryVectorEntry {
+  vector: Float32Array | null;
+  /** Caps that tried this query and got no vector, each at most once; empty once a vector exists. */
+  failed: QueryCap[];
+}
+
+/** Distinct query vectors one context keeps; inserting past this drops the oldest. */
+export const MAX_QUERY_VECTORS = 8;
+
+export function createSemanticContext(
+  services: Services,
+  env: Env,
+  config: SemanticConfig,
+  waitUntil?: (work: Promise<unknown>) => void,
+): SemanticContext {
   const embedder = createEmbedder(env, services.settings, config.model);
-  return { db: services.db, services, config, embedder: embedder && new MeteredEmbedder(services.db, embedder) };
+  return {
+    db: services.db,
+    services,
+    config,
+    embedder: embedder && new MeteredEmbedder(services.db, embedder),
+    queryVectors: new Map(),
+    ...(waitUntil ? { waitUntil } : {}),
+  };
 }
 
 export interface RecallHit {
@@ -73,22 +107,60 @@ export function rrf(lists: string[][], k = RRF_K): Map<string, number> {
 }
 
 /**
- * Embeds the query when an embedder is available and today's cap allows one more
- * request. Null on no embedder, the cap, or any AI error, so recall falls back to keywords.
+ * Embeds the query when an embedder is available and today's `cap` allows one more request.
+ * Null on no embedder, the cap, or any AI error, so recall falls back to keywords.
  */
-async function embedQuery(ctx: SemanticContext, query: string): Promise<Float32Array | null> {
+async function embedQuery(ctx: SemanticContext, query: string, cap: QueryCap): Promise<Float32Array | null> {
   const { db, config, embedder } = ctx;
   if (!embedder) return null;
   const day = UsageService.day();
   // Reserved before the call (which counts even if it fails), so concurrent turns cannot overrun the cap.
-  if (!reserveEmbedding(db, day, config.maxEmbeddingsPerDay, estimateTokens(query))) return null;
+  if (cap === "item") {
+    // A zero memory cap switches item embedding off too, the same as the item pass.
+    if (config.maxEmbeddingsPerDay === 0) return null;
+    if (reserveItemEmbedding(db, day, [conservativeEmbeddingTokens(query)], itemCaps(config)) === 0) return null;
+  } else if (!reserveEmbedding(db, day, config.maxEmbeddingsPerDay, estimateTokens(query))) return null;
   try {
-    const [vector] = await embedder.embed([query]);
+    let usage: Usage | undefined;
+    const [vector] = await embedder.embed([query], (reported) => (usage = reported));
+    if (cap === "item") correctItemTokens(db, day, Math.round(conservativeEmbeddingTokens(query)), usage);
     return vector && vector.length === embedder.dims ? vector : null;
   } catch (error) {
     console.warn("Semantic query embedding failed; using keyword recall", error instanceof Error ? error.message : String(error));
     return null;
   }
+}
+
+/** Cache key for a query: trimmed, inner whitespace collapsed, lower-cased. */
+export function queryKey(query: string): string {
+  return query.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * The query's vector, embedded at most once per context (one chat turn or scheduled run) and
+ * charged to `cap`. A vector either cap paid for is reused free. A null result is kept too, so a
+ * failed or capped query falls back to keywords without retrying under the same cap; the other
+ * cap may still try its own embed.
+ */
+export async function queryVector(ctx: SemanticContext, query: string, cap: QueryCap = "memory"): Promise<Float32Array | null> {
+  const cache = (ctx.queryVectors ??= new Map());
+  const key = queryKey(query);
+  const hit = cache.get(key);
+  if (hit && (hit.vector || hit.failed.includes(cap))) return hit.vector;
+  const vector = await embedQuery(ctx, query, cap);
+  // Re-read after the await: a concurrent call may have recorded the other cap's outcome.
+  const prior = cache.get(key);
+  if (prior?.vector) return prior.vector;
+  const failed = vector ? [] : [...new Set([...(prior?.failed ?? []), cap])];
+  cache.delete(key);
+  cache.set(key, { vector, failed });
+  while (cache.size > MAX_QUERY_VECTORS) cache.delete(cache.keys().next().value!);
+  return vector;
+}
+
+/** A vector already embedded for the query in this context, without embedding one. */
+export function peekQueryVector(ctx: SemanticContext, query: string): Float32Array | null {
+  return ctx.queryVectors?.get(queryKey(query))?.vector ?? null;
 }
 
 /**
@@ -143,8 +215,8 @@ function scanVectors(ctx: SemanticContext, model: string, query: Float32Array, i
 export async function hybridSearch(ctx: SemanticContext, query: string, opts: { limit: number; includeHistorical?: boolean }): Promise<RecallHit[]> {
   ensureSemanticSchema(ctx.db);
   const includeHistorical = opts.includeHistorical ?? hasHistoricalIntent(query);
-  const queryVector = await embedQuery(ctx, query);
-  const vectorHits = queryVector && ctx.embedder ? scanVectors(ctx, ctx.embedder.model, queryVector, includeHistorical) : [];
+  const vector = await queryVector(ctx, query);
+  const vectorHits = vector && ctx.embedder ? scanVectors(ctx, ctx.embedder.model, vector, includeHistorical) : [];
   const keywordHits = ctx.services.memories.search(query, CANDIDATES_PER_LIST, undefined, includeHistorical ? "all" : "current");
 
   const fused = rrf([vectorHits.map((h) => h.id), keywordHits.map((m) => m.id)]);

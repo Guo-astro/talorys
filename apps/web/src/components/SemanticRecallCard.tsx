@@ -4,12 +4,14 @@ import { RefreshCw, Trash2 } from "lucide-react";
 import { Button, Card, ConfirmDialog, ErrorNotice, Input, Switch } from "./ui";
 import { useApiMutation } from "../hooks/queries";
 import { api } from "../lib/api";
+import { statusRefetchInterval } from "./semanticPolling";
 
 // Local mirrors of the /api/semantic/* responses (apps/agent/src/semantic/routes.ts).
 interface SemanticConfig {
   enabled: boolean;
   model: string;
   maxEmbeddingsPerDay: number;
+  maxItemEmbeddingsPerDay: number;
 }
 
 interface SemanticStatus {
@@ -20,6 +22,7 @@ interface SemanticStatus {
   pending: number;
   embeddings_today: number;
   cap: number;
+  items?: { vectors: number; pending: number; by_type: { task: number; note: number; automation: number }; items_today: number; items_cap: number; indexing: boolean };
 }
 
 interface ReindexReport {
@@ -27,9 +30,11 @@ interface ReindexReport {
   pending: number;
   capped: boolean;
   error?: string;
+  surfaces?: { embedded: number; pending: number };
 }
 
 const DEFAULT_CAP = 500;
+const DEFAULT_ITEM_CAP = 50;
 const EMBEDDERS: Record<SemanticStatus["embedder"], string> = { "workers-ai": "Workers AI", mock: "Mock (local dev)", none: "Not available" };
 
 function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
@@ -46,7 +51,7 @@ function Row({ label, hint, children }: { label: string; hint?: ReactNode; child
 
 /**
  * Settings card for semantic memory recall: the opt-in switch, the daily embedding cap,
- * index status (polled while memories are pending) and the reindex and delete actions.
+ * index status (polled while memories are pending or an item pass runs) and the reindex and delete actions.
  */
 export function SemanticRecallCard() {
   const qc = useQueryClient();
@@ -62,11 +67,14 @@ export function SemanticRecallCard() {
     queryFn: () => api<SemanticStatus>("/semantic/status"),
     enabled,
     refetchOnMount: "always",
-    refetchInterval: (q) => ((q.state.data?.pending ?? 0) > 0 ? 3000 : false),
+    refetchInterval: (q) => statusRefetchInterval(q.state.data),
   });
   const savedCap = config.data?.config?.maxEmbeddingsPerDay ?? DEFAULT_CAP;
   const [cap, setCap] = useState(savedCap);
   useEffect(() => setCap(savedCap), [savedCap]);
+  const savedItemCap = config.data?.config?.maxItemEmbeddingsPerDay ?? DEFAULT_ITEM_CAP;
+  const [itemCapInput, setItemCapInput] = useState(savedItemCap);
+  useEffect(() => setItemCapInput(savedItemCap), [savedItemCap]);
   const savedModel = config.data?.config?.model ?? "";
   const [model, setModel] = useState(savedModel);
   useEffect(() => setModel(savedModel), [savedModel]);
@@ -89,7 +97,12 @@ export function SemanticRecallCard() {
   const submitCap = () => {
     if (validCap && cap !== savedCap) saveConfig.mutate({ maxEmbeddingsPerDay: cap });
   };
+  const validItemCap = Number.isInteger(itemCapInput) && itemCapInput >= 1 && itemCapInput <= 10_000;
+  const submitItemCap = () => {
+    if (validItemCap && itemCapInput !== savedItemCap) saveConfig.mutate({ maxItemEmbeddingsPerDay: itemCapInput });
+  };
   const s = status.data;
+  const itemCap = s?.items?.items_cap ?? DEFAULT_ITEM_CAP;
   const stats: [string, string][] = s
     ? [
         ["Embedder", EMBEDDERS[s.embedder] ?? s.embedder],
@@ -98,6 +111,8 @@ export function SemanticRecallCard() {
         ["Embeddings today", `${s.embeddings_today} / ${s.cap}`],
       ]
     : [["Status", "Loading…"]];
+  const itemsIndexed = s?.items ? s.items.by_type.task + s.items.by_type.note + s.items.by_type.automation : 0;
+  const itemsPending = s?.items?.pending ?? 0;
   const busy = reindex.isPending || wipe.isPending;
 
   return (
@@ -105,7 +120,7 @@ export function SemanticRecallCard() {
       <h2 className="px-1 text-xs font-medium uppercase tracking-wider text-fg-subtle">Semantic memory recall</h2>
       <Card>
         <div className="divide-y divide-border">
-          <Row label="Semantic memory recall" hint={`Finds memories by meaning using Workers AI embeddings, up to ${savedCap} per day. Off by default.`}>
+          <Row label="Semantic memory recall" hint={`Finds memories, tasks, notes and reminders by meaning using Workers AI embeddings. Memories use up to ${savedCap} embeddings per day; tasks, notes and reminders have their own ${itemCap} per day. Off by default.`}>
             <div className="flex justify-end">
               <Switch
                 checked={enabled}
@@ -138,6 +153,22 @@ export function SemanticRecallCard() {
                   ))}
                 </div>
               )}
+              {s && !status.error && (
+                <div className="flex items-center justify-between gap-3 px-5 py-4 text-sm">
+                  <p className="text-xs text-fg-subtle">Tasks, notes, reminders</p>
+                  <p className="font-medium tabular-nums">
+                    {itemsIndexed} indexed, <span data-stat="Items pending">{itemsPending}</span> pending
+                  </p>
+                </div>
+              )}
+              {s?.items && !status.error && (
+                <div className="flex items-center justify-between gap-3 px-5 py-4 text-sm">
+                  <p className="text-xs text-fg-subtle">Item embeddings today</p>
+                  <p className="font-medium tabular-nums" data-stat="Item embeddings today">
+                    {s.items.items_today} / {itemCap}
+                  </p>
+                </div>
+              )}
               <Row label="Embedding model" hint="Default: @cf/baai/bge-m3. Must be a Workers AI text embedding model.">
                 <form
                   className="flex gap-2"
@@ -162,6 +193,29 @@ export function SemanticRecallCard() {
                 >
                   <Input type="number" min={1} max={10_000} step={1} value={cap} onChange={(e) => setCap(Number(e.target.value))} onBlur={submitCap} aria-label="Max embeddings per day" />
                   <Button type="submit" variant="outline" disabled={!validCap || cap === savedCap} loading={saveConfig.isPending}>
+                    Save
+                  </Button>
+                </form>
+              </Row>
+              <Row label="Max item embeddings per day" hint="For tasks, notes and reminders, counted apart from memories. Items saved after it is spent are found by keyword until the next day.">
+                <form
+                  className="flex gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    submitItemCap();
+                  }}
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10_000}
+                    step={1}
+                    value={itemCapInput}
+                    onChange={(e) => setItemCapInput(Number(e.target.value))}
+                    onBlur={submitItemCap}
+                    aria-label="Max item embeddings per day"
+                  />
+                  <Button type="submit" variant="outline" disabled={!validItemCap || itemCapInput === savedItemCap} loading={saveConfig.isPending}>
                     Save
                   </Button>
                 </form>

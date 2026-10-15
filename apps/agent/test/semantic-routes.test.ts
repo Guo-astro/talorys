@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { client, inAgent, loggedIn, proposeAction } from "./helpers";
 import { MockEmbedder, embeddingsToday } from "../src/semantic/embeddings";
 import { runIndexer } from "../src/semantic/indexer";
+import { itemUsageToday, runItemPass } from "../src/semantic/itemIndex";
 import { UsageService } from "../src/services/usage";
 import { invalidateSemanticCache } from "../src/semantic";
 import {
@@ -92,6 +93,7 @@ describe("semantic routes", () => {
       pending: 0,
       embeddings_today: 0,
       cap: DEFAULT_SEMANTIC_CONFIG.maxEmbeddingsPerDay,
+      items: expect.any(Object),
     });
     await inAgent((agent) => {
       expect(semanticTableNames(agent.services.db)).toEqual([]);
@@ -108,17 +110,18 @@ describe("semantic routes", () => {
     expect(await c.json("/api/semantic/status")).toEqual({
       enabled: true,
       ever_enabled: true,
-      schema: { track: "slim", version: 2 },
+      schema: { track: "slim", version: 3 },
       embedder: "mock",
       vectors: 0,
       pending: count,
       embeddings_today: 0,
       cap: 42,
+      items: expect.any(Object),
     });
 
     await c.call("/api/semantic/config", { method: "PUT", body: { enabled: false } });
     const off = await c.json("/api/semantic/status");
-    expect(off).toMatchObject({ enabled: false, ever_enabled: true, schema: { track: "slim", version: 2 }, pending: 0 });
+    expect(off).toMatchObject({ enabled: false, ever_enabled: true, schema: { track: "slim", version: 3 }, pending: 0 });
     await inAgent((agent) => reset(agent.services));
   });
 
@@ -200,11 +203,11 @@ describe("semantic routes", () => {
 
     const reindex = await c.call("/api/semantic/reindex", { method: "POST" });
     expect(reindex.status).toBe(200);
-    expect(await reindex.json()).toEqual({ embedded: 61, pending: 0, capped: false });
+    expect(await reindex.json()).toEqual({ embedded: 61, pending: 0, capped: false, surfaces: expect.any(Object) });
     expect(await c.json("/api/semantic/status")).toMatchObject({ vectors: 61, pending: 0, embeddings_today: 2 });
 
     // A second reindex drops the vectors and embeds them all again.
-    expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 61, pending: 0, capped: false });
+    expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 61, pending: 0, capped: false, surfaces: expect.any(Object) });
 
     const { hits } = await c.json("/api/semantic/search?q=my%20vehicle");
     expect(hits).toHaveLength(1);
@@ -230,7 +233,7 @@ describe("semantic routes", () => {
     });
     const c = await loggedIn();
     await c.call("/api/semantic/config", { method: "PUT", body: { enabled: true, maxEmbeddingsPerDay: 10_000 } });
-    expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 5, pending: 0, capped: false });
+    expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 5, pending: 0, capped: false, surfaces: expect.any(Object) });
 
     let entered!: () => void;
     let release!: () => void;
@@ -255,12 +258,13 @@ describe("semantic routes", () => {
     await inEmbed;
 
     const reindex = c.call("/api/semantic/reindex", { method: "POST" });
-    await new Promise((r) => setTimeout(r, 50));
+    // Release the stale pass only once the reindex has deleted the old vectors, however slow the run.
+    for (let i = 0; i < 500 && (await c.json("/api/semantic/status")).vectors !== 0; i++) await new Promise((r) => setTimeout(r, 10));
     release();
     const res = await reindex;
     expect(res.status).toBe(200);
     // The stale pass writes the newest memory; the follow-up re-embeds the other five.
-    expect(await res.json()).toEqual({ embedded: 5, pending: 0, capped: false });
+    expect(await res.json()).toEqual({ embedded: 5, pending: 0, capped: false, surfaces: expect.any(Object) });
     expect(await c.json("/api/semantic/status")).toMatchObject({ vectors: 6, pending: 0 });
     await inAgent((agent) => {
       reset(agent.services);
@@ -278,7 +282,7 @@ describe("semantic routes", () => {
     // `reset` dropped the usage table, so today's count starts at zero.
     await enableQuietly({ maxEmbeddingsPerDay: 1 });
 
-    expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 50, pending: 10, capped: true });
+    expect(await c.json("/api/semantic/reindex", { method: "POST" })).toEqual({ embedded: 50, pending: 10, capped: true, surfaces: expect.any(Object) });
     const search = await c.call("/api/semantic/search?q=kayak");
     expect(search.status).toBe(200);
     const { hits } = (await search.json()) as { hits: { cosine: number | null }[] };
@@ -477,6 +481,118 @@ describe("semantic forget purge", () => {
     await inAgent((a) => {
       expect(vectorIds(a.services)).toEqual([...ids].sort());
       resetAll(a.services);
+    });
+  });
+});
+
+type ItemStatus = { items: { vectors: number; pending: number; items_today: number } };
+
+const itemVectorRows = (s: Services, id: string) =>
+  s.db.all<{ content_hash: string }>(`SELECT content_hash FROM tal_semantic_item_vectors WHERE item_id = ? ORDER BY part`, id);
+
+async function createItems(c: Awaited<ReturnType<typeof loggedIn>>) {
+  const task = await c.call("/api/tasks", { method: "POST", body: { title: "Book dentist cleaning", description: "Six month checkup" } });
+  const note = await c.call("/api/notes", { method: "POST", body: { title: "Side gate", content: "Keypad combo is 4821" } });
+  const automation = await c.call("/api/automations", {
+    method: "POST",
+    body: { name: "Pick up steaks for Friday dinner", kind: "reminder", message: "Pick up steaks for Friday dinner", schedule: { type: "once", at: "2099-01-01T17:00" } },
+  });
+  expect([task.status, note.status, automation.status]).toEqual([201, 201, 201]);
+  return {
+    task: ((await task.json()) as { task: { id: string } }).task.id,
+    note: ((await note.json()) as { note: { id: string } }).note.id,
+    automation: ((await automation.json()) as { automation: { id: string } }).automation.id,
+  };
+}
+
+function resetItems(s: Services) {
+  resetAll(s);
+  s.db.run(`DELETE FROM tal_tasks`);
+  s.db.run(`DELETE FROM tal_notes`);
+  s.db.run(`DELETE FROM tal_automations`);
+}
+
+describe("semantic item writes in the app", () => {
+  it("a task, note and automation saved in the app stay pending until a chat turn or search", async () => {
+    await inAgent((a) => resetItems(a.services));
+    await enableQuietly();
+    const c = await loggedIn();
+    const ids = await createItems(c);
+    await new Promise((r) => setTimeout(r, 100));
+    const { items } = (await c.json("/api/semantic/status")) as ItemStatus;
+    // One part each for the task and the automation, two (title and body) for the note.
+    expect(items.pending).toBe(4);
+    expect(items.items_today).toBe(0);
+    await inAgent((a) => {
+      for (const id of Object.values(ids)) expect(itemVectorRows(a.services, id)).toEqual([]);
+      resetItems(a.services);
+    });
+  });
+
+  it("an edit in the app makes the item pending again without embedding it", async () => {
+    await inAgent((a) => resetItems(a.services));
+    await enableQuietly();
+    const c = await loggedIn();
+    const created = await createItems(c);
+    await inAgent(async (a) => {
+      const s = a.services;
+      const sem: SemanticContext = { db: s.db, services: s, embedder: new MockEmbedder(), config: { ...DEFAULT_SEMANTIC_CONFIG, ...readSemanticConfig(s.settings)! } };
+      await runItemPass(sem, { maxEmbed: 50 });
+    });
+    expect(((await c.json("/api/semantic/status")) as ItemStatus).items.pending).toBe(0);
+    expect((await c.call(`/api/tasks/${created.task}`, { method: "PATCH", body: { title: "Book a teeth cleaning" } })).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(((await c.json("/api/semantic/status")) as ItemStatus).items.pending).toBe(1);
+    await inAgent((a) => resetItems(a.services));
+  });
+
+  it("a delete removes the item's vectors in the same request", async () => {
+    await inAgent((a) => resetItems(a.services));
+    await enableQuietly();
+    const c = await loggedIn();
+    const ids = await createItems(c);
+    await inAgent(async (a) => {
+      const s = a.services;
+      const sem: SemanticContext = { db: s.db, services: s, embedder: new MockEmbedder(), config: { ...DEFAULT_SEMANTIC_CONFIG, ...readSemanticConfig(s.settings)! } };
+      await runItemPass(sem, { maxEmbed: 50 });
+      for (const id of Object.values(ids)) expect(itemVectorRows(s, id).length).toBeGreaterThan(0);
+    });
+    expect((await c.call(`/api/tasks/${ids.task}`, { method: "DELETE" })).status).toBe(200);
+    expect((await c.call(`/api/notes/${ids.note}`, { method: "DELETE" })).status).toBe(200);
+    expect((await c.call(`/api/automations/${ids.automation}`, { method: "DELETE" })).status).toBe(200);
+    await inAgent((a) => {
+      for (const id of Object.values(ids)) expect(itemVectorRows(a.services, id)).toEqual([]);
+      resetItems(a.services);
+    });
+  });
+
+  it("with the feature off, app writes embed nothing", async () => {
+    await inAgent((a) => {
+      resetItems(a.services);
+      writeSemanticConfig(a.services.settings, { enabled: false }, a.services.db);
+      invalidateSemanticCache(a.services);
+    });
+    const c = await loggedIn();
+    const ids = await createItems(c);
+    expect((await c.call(`/api/tasks/${ids.task}`, { method: "PATCH", body: { title: "Book a teeth cleaning" } })).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 200));
+    await inAgent((a) => {
+      const s = a.services;
+      const table = s.db.one(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tal_semantic_item_vectors'`);
+      if (table) expect(s.db.one<{ n: number }>(`SELECT COUNT(*) AS n FROM tal_semantic_item_vectors`)!.n).toBe(0);
+      expect(itemUsageToday(s.db, UsageService.day()).requests).toBe(0);
+      resetItems(s);
+    });
+  });
+
+  it("with the feature never enabled, app writes create no semantic tables", async () => {
+    await inAgent((a) => resetItems(a.services));
+    const c = await loggedIn();
+    await createItems(c);
+    await new Promise((r) => setTimeout(r, 100));
+    await inAgent((a) => {
+      expect(semanticTableNames(a.services.db)).toEqual([]);
+      resetItems(a.services);
     });
   });
 });

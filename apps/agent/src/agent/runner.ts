@@ -114,6 +114,7 @@ export class AgentRunner {
       // 2. Context: relevant memories, summary, recent history within the token budget.
       const selected = this.ext ? await this.ext.selectMemories(userMessage.content) : selectRelevantMemories(s.memories, userMessage.content);
       const memories = s.memoryHistory.promptMemories(selected, memoryTokenBudget(limits));
+      const items = this.ext?.selectItems ? await this.ext.selectItems(userMessage.content) : undefined;
       const history = s.pendingActions
         .withCurrentStatus(s.conversations.messages(conversation.id, { limit: 200 }))
         .filter((m) => m.role === "user" || m.status === "complete")
@@ -127,6 +128,7 @@ export class AgentRunner {
         autoMemory: settings.autoMemory,
         memories,
         conversationSummary: summary,
+        ...(items ? { items } : {}),
       });
       const historyBudget = Math.max(500, limits.maxContextTokens - estimateTokens(baseSystem) - 600);
       let window = buildContextWindow(history, historyBudget, summaryUpto);
@@ -163,6 +165,7 @@ export class AgentRunner {
             autoMemory: settings.autoMemory,
             memories,
             conversationSummary: summary,
+            ...(items ? { items } : {}),
           });
 
       // 3. Tools with per-turn limits.

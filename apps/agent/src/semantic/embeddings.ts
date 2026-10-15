@@ -28,6 +28,20 @@ function estimatedEmbeddingTokens(texts: string[]): number {
 }
 
 /**
+ * A token estimate that errs high for non-Latin text: a quarter token per ASCII character plus
+ * one per other code point, since Chinese, Japanese and Korean run close to a token a character.
+ */
+export function conservativeEmbeddingTokens(text: string): number {
+  let ascii = 0;
+  let other = 0;
+  for (const ch of text) {
+    if (ch.codePointAt(0)! <= 0x7f) ascii++;
+    else other++;
+  }
+  return Math.ceil(ascii / 4) + other;
+}
+
+/**
  * Workers AI text embeddings in one call. Throws on any failure or malformed output.
  * A model missing from MODEL_DIMS starts at 0 dims and takes its size from the first
  * successful response; every later response must match it.
@@ -79,6 +93,7 @@ const MOCK_CONCEPTS: string[][] = [
   ["peanut", "peanuts", "reese's", "reeses", "allergic", "allergy"],
   ["city", "live", "portland", "denver"],
   ["heights", "mountains", "mountain", "hiking", "knee"],
+  ["botany", "plants", "plant", "water", "garden", "fern"],
 ];
 
 const encoder = new TextEncoder();

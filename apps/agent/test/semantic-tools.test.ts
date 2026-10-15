@@ -6,7 +6,7 @@ import { MockEmbedder } from "../src/semantic/embeddings";
 import { runIndexer } from "../src/semantic/indexer";
 import { dropSemanticData } from "../src/semantic/migrations";
 import type { SemanticContext } from "../src/semantic/recall";
-import { semanticTools } from "../src/semantic/tools";
+import { SEARCH_DESCRIPTION, SEARCH_MEMORIES_DESCRIPTION, SEARCH_NOTES_DESCRIPTION, semanticTools } from "../src/semantic/tools";
 import { ALL_TOOLS, type ToolContext, type ToolDefinition } from "../src/tools";
 import type { ImmediateTool } from "../src/tools/registry";
 import type { TalorysAgent } from "../src/agent/talorys-agent";
@@ -29,17 +29,32 @@ function setup(a: TalorysAgent) {
 }
 
 // forget_memory stays upstream's: it only proposes; the approve route purges the vector (semantic-forget.test.ts).
-const WRAPPED = ["search_memories", "search", "remember", "update_memory"];
+// Task, note and automation tools stay upstream's: the next chat turn or search embeds what they
+// saved, and an approved delete prunes its vectors.
+const WRAPPED = [
+  "search_memories",
+  "search",
+  "remember",
+  "update_memory",
+  "list_tasks",
+  "search_notes",
+];
+
+const DESCRIPTIONS: Record<string, string> = {
+  search: SEARCH_DESCRIPTION,
+  search_notes: SEARCH_NOTES_DESCRIPTION,
+  search_memories: SEARCH_MEMORIES_DESCRIPTION,
+};
 
 describe("semantic tools", () => {
-  it("keep every upstream tool and replace only the four wrappers' execute", async () => {
+  it("keep every upstream tool and replace only the wrappers' execute and the search descriptions", async () => {
     await inAgent((a) => {
       const { sem } = setup(a);
       const tools = semanticTools(sem);
       expect(tools.map((t) => t.name)).toEqual(ALL_TOOLS.map((t) => t.name));
       tools.forEach((t, i) => {
         const base = ALL_TOOLS[i]!;
-        expect(t.description).toBe(base.description);
+        expect(t.description).toBe(DESCRIPTIONS[t.name] ?? base.description);
         expect(t.input).toBe(base.input);
         expect(t.permission).toBe(base.permission);
         expect(t.maxCallsPerTurn).toBe(base.maxCallsPerTurn);
@@ -87,7 +102,7 @@ describe("semantic tools", () => {
       const result = (await tool(semanticTools(sem), "search").execute({ query: "kayak" }, toolCtx)) as Record<string, unknown> & {
         memories: { id: string; content: string; saved: string }[];
       };
-      expect(Object.keys(result).sort()).toEqual(["conversations", "memories", "notes", "tasks"]);
+      expect(Object.keys(result)).toEqual(["tasks", "notes", "memories", "conversations", "automations"]);
       expect(result.tasks).toEqual(upstream.tasks);
       expect(result.notes).toEqual(upstream.notes);
       expect(result.conversations).toEqual(upstream.conversations);
@@ -100,7 +115,7 @@ describe("semantic tools", () => {
     });
   });
 
-  it("wraps exactly the four upstream tools", async () => {
+  it("wraps exactly the listed upstream tools", async () => {
     await inAgent((a) => {
       const { sem } = setup(a);
       const tools = semanticTools(sem);
