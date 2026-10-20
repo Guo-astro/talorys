@@ -5,6 +5,7 @@ import { Badge, Button, Card, ConfirmDialog, Dialog, EmptyState, ErrorNotice, In
 import { keys, useApiMutation, useAutomationRuns, useAutomations } from "../hooks/queries";
 import { api } from "../lib/api";
 import { cn, formatDateTime, relativeTime } from "../lib/utils";
+import { useI18n } from "../lib/i18n";
 
 const KIND_META: Record<AutomationKind, { label: string; icon: typeof Bell; hint: string }> = {
   reminder: { label: "Reminder", icon: Bell, hint: "Shows your message in the notification center. No AI used." },
@@ -15,6 +16,7 @@ const KIND_META: Record<AutomationKind, { label: string; icon: typeof Bell; hint
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function AutomationsPage() {
+  const i18n = useI18n();
   const { data, isLoading, error, refetch } = useAutomations();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Automation | null>(null);
@@ -77,8 +79,8 @@ export default function AutomationsPage() {
           </div>
           <p className="mt-0.5 text-sm text-fg-muted">{a.schedule_description}</p>
           <p className="mt-0.5 text-xs text-fg-subtle">
-            {a.next_run && a.enabled ? `Next: ${formatDateTime(a.next_run, tz)} (${relativeTime(a.next_run)})` : a.status === "completed" ? "Finished" : a.enabled ? "Not scheduled" : "Paused"}
-            {a.last_run && ` · Last run ${relativeTime(a.last_run)}`}
+            {a.next_run && a.enabled ? `Next: ${formatDateTime(a.next_run, tz, i18n.locale)} (${relativeTime(a.next_run, i18n)})` : a.status === "completed" ? "Finished" : a.enabled ? "Not scheduled" : "Paused"}
+            {a.last_run && ` · Last run ${relativeTime(a.last_run, i18n)}`}
             {a.run_count > 0 && ` · ${a.run_count} run${a.run_count === 1 ? "" : "s"}`}
           </p>
           {a.last_error && <p className="mt-1 text-xs text-danger">{a.last_error}</p>}
@@ -147,8 +149,8 @@ export default function AutomationsPage() {
                   <div key={a.id} className="min-w-44 rounded-xl border border-border bg-surface px-4 py-3">
                     <AlarmClock className="h-4 w-4 text-accent" />
                     <p className="mt-2 truncate text-sm font-medium">{a.name}</p>
-                    <p className="text-xs text-fg-subtle">{relativeTime(a.next_run)}</p>
-                    <p className="text-xs text-fg-subtle">{formatDateTime(a.next_run, tz)}</p>
+                    <p className="text-xs text-fg-subtle">{relativeTime(a.next_run, i18n)}</p>
+                    <p className="text-xs text-fg-subtle">{formatDateTime(a.next_run, tz, i18n.locale)}</p>
                   </div>
                 ))}
               </div>
@@ -237,6 +239,7 @@ function duration(run: AutomationRun): string {
 
 /** One execution; click to expand the full output or error. */
 function RunItem({ run, tz, showName, onOpenHistory }: { run: AutomationRun; tz: string; showName?: boolean; onOpenHistory?: () => void }) {
+  const i18n = useI18n();
   const [open, setOpen] = useState(false);
   const detail = run.error ?? run.result ?? (run.status === "running" ? "Running…" : "");
   const took = duration(run);
@@ -245,14 +248,14 @@ function RunItem({ run, tz, showName, onOpenHistory }: { run: AutomationRun; tz:
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-start gap-3 px-4 py-2.5 text-left hover:bg-subtle">
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">
-            {showName ? run.automation_name : formatDateTime(run.started_at, tz)}
+            {showName ? run.automation_name : formatDateTime(run.started_at, tz, i18n.locale)}
           </p>
           <p className={cn("text-xs", open ? "hidden" : "truncate", run.status === "error" ? "text-danger" : "text-fg-subtle")}>{detail}</p>
         </div>
         <div className="shrink-0 text-right">
           <Badge tone={RUN_TONE[run.status]}>{RUN_LABEL[run.status]}</Badge>
-          <p className="mt-0.5 text-xs text-fg-subtle" title={formatDateTime(run.started_at, tz)}>
-            {relativeTime(run.started_at)}
+          <p className="mt-0.5 text-xs text-fg-subtle" title={formatDateTime(run.started_at, tz, i18n.locale)}>
+            {relativeTime(run.started_at, i18n)}
             {took && ` · ${took}`}
           </p>
         </div>
@@ -266,8 +269,8 @@ function RunItem({ run, tz, showName, onOpenHistory }: { run: AutomationRun; tz:
             <p className="text-xs text-fg-subtle">No output recorded.</p>
           )}
           <p className="text-xs text-fg-subtle">
-            Started {formatDateTime(run.started_at, tz)}
-            {run.finished_at && ` · finished ${formatDateTime(run.finished_at, tz)}`}
+            Started {formatDateTime(run.started_at, tz, i18n.locale)}
+            {run.finished_at && ` · finished ${formatDateTime(run.finished_at, tz, i18n.locale)}`}
             {onOpenHistory && (
               <>
                 {" · "}
@@ -333,6 +336,7 @@ function tomorrowAt9(): string {
 }
 
 function AutomationForm({ open, onClose, tz, automation }: { open: boolean; onClose: () => void; tz: string; automation?: Automation | null }) {
+  const i18n = useI18n();
   // Remounted per automation (via `key`), so editing starts from the saved values.
   const initial = automation?.schedule;
   const [kind, setKind] = useState<AutomationKind>(automation?.kind ?? "reminder");
@@ -524,7 +528,7 @@ function AutomationForm({ open, onClose, tz, automation }: { open: boolean; onCl
           ) : (
             <span className="mt-1 block">
               {preview.runs.length === 1 ? "Runs " : "Next runs: "}
-              {preview.runs.map((d) => `${formatDateTime(d.toISOString(), tz)} (${relativeTime(d.toISOString())})`).join(" · ")}
+              {preview.runs.map((d) => `${formatDateTime(d.toISOString(), tz, i18n.locale)} (${relativeTime(d.toISOString(), i18n)})`).join(" · ")}
             </span>
           )}
         </p>

@@ -6,6 +6,7 @@ import {
   MEMORY_STATUSES,
   TALORYS_VERSION,
   backupSchema,
+  languagePreferenceSchema,
   scheduleSpecSchema,
 } from "@talorys/shared";
 import type { Services } from "./container";
@@ -178,6 +179,8 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
     const settings: Record<string, unknown> = { ...d.settings };
     const ignored = IMPORT_IGNORED_SETTINGS.filter((key) => key in settings);
     for (const key of ignored) delete settings[key];
+    // A backup from a newer version may name a language this one doesn't have; keep the current one.
+    if ("language" in settings && !languagePreferenceSchema.safeParse(settings.language).success) delete settings.language;
     if (Object.keys(settings).length > 0) {
       // Validated merge; invalid fields are rejected with a clear error.
       s.settings.update(settings as never);

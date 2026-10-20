@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BACKUP_FORMAT, LIMIT_CEILINGS } from "./constants";
+import { BACKUP_FORMAT, LANGUAGES, LIMIT_CEILINGS } from "./constants";
 import { isValidTimeZone, scheduleSpecSchema } from "./recurrence";
 
 // ---------- Primitives ----------
@@ -315,10 +315,18 @@ export const memoryHistorySettingsSchema = z.object({
 });
 export type MemoryHistorySettings = z.infer<typeof memoryHistorySettingsSchema>;
 
+/** UI language. "system" follows the browser and falls back to English. */
+export const languagePreferenceSchema = z.enum(["system", ...LANGUAGES]);
+
 export const settingsSchema = z.object({
   agentName: shortText(60),
   timezone: z.string().refine(isValidTimeZone, "Unknown IANA timezone"),
   theme: z.enum(["system", "light", "dark"]),
+  /**
+   * Reads an unknown language (saved by a newer version, before a rollback) as "system",
+   * so it can't fail validation and reset every other setting.
+   */
+  language: languagePreferenceSchema.catch("system"),
   model: z.string().regex(/^@(cf|hf)\/[\w.\-/]+$/, "Must be a Workers AI model id"),
   temperature: z.number().min(0).max(1.5),
   limits: limitsSchema,
@@ -333,7 +341,12 @@ export type Settings = z.infer<typeof settingsSchema>;
 export const settingsUpdateSchema = settingsSchema
   .omit({ limits: true, memoryHistory: true })
   .partial()
-  .extend({ limits: limitsSchema.partial().optional(), memoryHistory: memoryHistorySettingsSchema.partial().optional() });
+  .extend({
+    // Changes are still validated strictly; only reading stored settings is lenient.
+    language: languagePreferenceSchema.optional(),
+    limits: limitsSchema.partial().optional(),
+    memoryHistory: memoryHistorySettingsSchema.partial().optional(),
+  });
 
 export const loginSchema = z.object({ password: z.string().min(1).max(256) });
 export const changePasswordSchema = z.object({

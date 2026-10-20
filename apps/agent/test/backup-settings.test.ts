@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeNextRun } from "@talorys/shared";
+import { BACKUP_FORMAT, computeNextRun } from "@talorys/shared";
 import { SettingsService } from "../src/services/settings";
 import { inAgent, loggedIn } from "./helpers";
 
@@ -25,6 +25,39 @@ describe("portable backup settings", () => {
       await inAgent((agent) => {
         agent.services.settings = new SettingsService(agent.services.db);
       });
+    }
+  });
+
+  it("reads an unknown stored language as system and keeps the other settings", async () => {
+    const c = await loggedIn();
+    const before = (await c.json("/api/settings")).settings;
+    await inAgent((agent) => {
+      agent.services.settings.setJson("app.settings", { ...before, language: "zz", agentName: "Kept", timezone: "Europe/Warsaw" });
+    });
+    try {
+      const { settings } = await c.json("/api/settings");
+      expect(settings).toMatchObject({ language: "system", agentName: "Kept", timezone: "Europe/Warsaw", model: before.model, limits: before.limits });
+    } finally {
+      await inAgent((agent) => {
+        agent.services.settings.setJson("app.settings", before);
+      });
+    }
+  });
+
+  it("imports a backup that names an unknown language and keeps the current one", async () => {
+    const c = await loggedIn();
+    const before = (await c.json("/api/settings")).settings;
+    await c.json("/api/settings", { method: "PATCH", body: { language: "en" } });
+    try {
+      const res = await c.call("/api/import", {
+        method: "POST",
+        body: { format: BACKUP_FORMAT, version: 1, exported_at: new Date().toISOString(), data: { settings: { language: "zz", agentName: "Imported" } } },
+      });
+      expect(res.status).toBe(200);
+      const { settings } = await c.json("/api/settings");
+      expect(settings).toMatchObject({ language: "en", agentName: "Imported" });
+    } finally {
+      await c.json("/api/settings", { method: "PATCH", body: { language: before.language, agentName: before.agentName } });
     }
   });
 
