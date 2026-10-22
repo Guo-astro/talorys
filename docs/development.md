@@ -66,6 +66,10 @@ when a parameter is an element such as `<code>`. Placeholders are written as
 message is an object keyed by `Intl.PluralRules` categories (`one`, `few`,
 `many`, `other`, ...) and takes `{count}`.
 
+Keys are grouped by where the text appears: `nav.*` for the app shell,
+`tasks.*`, `memory.*` and so on for each page. Labels that many screens share,
+such as Cancel, Delete and Close, live under `common.*`.
+
 Pass `locale` from `useI18n()` to `formatDateTime`, `relativeTime`,
 `toLocaleString` and other display formatters. With the default "Browser
 default" language it is the browser's locale, so nothing changes for owners who

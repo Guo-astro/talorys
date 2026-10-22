@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Loader2, X } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { useI18n } from "../../lib/i18n";
 
 // Small shadcn-style primitives, styled with the Talorys tokens.
 
@@ -104,7 +105,8 @@ export function Badge({ children, tone = "neutral", className }: { children: Rea
 }
 
 export function Spinner({ className }: { className?: string }) {
-  return <Loader2 className={cn("h-5 w-5 animate-spin text-fg-subtle", className)} aria-label="Loading" />;
+  const { t } = useI18n();
+  return <Loader2 className={cn("h-5 w-5 animate-spin text-fg-subtle", className)} aria-label={t("common.loading")} />;
 }
 
 export function EmptyState({ icon, title, children, action }: { icon?: ReactNode; title: string; children?: ReactNode; action?: ReactNode }) {
@@ -131,13 +133,14 @@ export function PageHeader({ title, description, actions }: { title: string; des
 }
 
 export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
-  const message = error instanceof Error ? error.message : "Something went wrong.";
+  const { t } = useI18n();
+  const message = error instanceof Error ? error.message : t("common.somethingWentWrong");
   return (
     <div role="alert" className="flex items-start justify-between gap-3 rounded-lg border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
       <span>{message}</span>
       {onRetry && (
         <button type="button" className="shrink-0 font-medium underline underline-offset-2" onClick={onRetry}>
-          Retry
+          {t("common.retry")}
         </button>
       )}
     </div>
@@ -160,6 +163,7 @@ export function Dialog({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -190,7 +194,7 @@ export function Dialog({
         <div className="animate-slide-up">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
             <h2 className="text-base font-semibold">{title}</h2>
-            <button type="button" onClick={onClose} className="rounded-md p-1 text-fg-subtle hover:bg-muted hover:text-fg" aria-label="Close">
+            <button type="button" onClick={onClose} className="rounded-md p-1 text-fg-subtle hover:bg-muted hover:text-fg" aria-label={t("common.close")}>
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -206,7 +210,7 @@ export function ConfirmDialog({
   open,
   title,
   message,
-  confirmLabel = "Delete",
+  confirmLabel,
   onConfirm,
   onCancel,
   loading,
@@ -219,6 +223,7 @@ export function ConfirmDialog({
   onCancel: () => void;
   loading?: boolean;
 }) {
+  const { t } = useI18n();
   return (
     <Dialog
       open={open}
@@ -227,10 +232,10 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="ghost" onClick={onCancel}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button variant="danger" onClick={onConfirm} loading={loading}>
-            {confirmLabel}
+            {confirmLabel ?? t("common.delete")}
           </Button>
         </>
       }

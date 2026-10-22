@@ -6,6 +6,32 @@
  * Intl.PluralRules categories and always takes a {count} parameter.
  */
 export const en = {
+  "common.cancel": "Cancel",
+  "common.close": "Close",
+  "common.delete": "Delete",
+  "common.dismiss": "Dismiss",
+  "common.loading": "Loading",
+  "common.retry": "Retry",
+  "common.somethingWentWrong": "Something went wrong.",
+  "common.unreachable": "Talorys is unreachable.",
+
+  "nav.main": "Main",
+  "nav.chat": "Chat",
+  "nav.memory": "Memory",
+  "nav.tasks": "Tasks",
+  "nav.notes": "Notes",
+  "nav.automations": "Automations",
+  "nav.automationsShort": "Schedules",
+  "nav.settings": "Settings",
+  "nav.lock": "Lock",
+
+  "notifications.title": "Notifications",
+  "notifications.titleUnread": { other: "Notifications ({count} unread)" },
+  "notifications.markAllRead": "Mark all as read",
+  "notifications.empty": "No notifications",
+  "notifications.emptyHint": "Reminders and automation results will appear here.",
+  "notifications.delete": "Delete notification",
+
   "time.justNow": "just now",
   "time.inAMoment": "in a moment",
 

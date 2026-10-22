@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useState } from "react";
 import { CheckCircle2, AlertCircle, X } from "lucide-react";
 import { cn } from "../lib/utils";
+import { useI18n } from "../lib/i18n";
 
 interface Toast {
   id: number;
@@ -11,6 +12,7 @@ interface Toast {
 const ToastContext = createContext<(message: string, tone?: Toast["tone"]) => void>(() => {});
 
 export function ToastProvider({ children }: { children: ReactNode }) {
+  const i18n = useI18n();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const push = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = Date.now() + Math.random();
@@ -32,7 +34,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           >
             {t.tone === "error" ? <AlertCircle className="h-4 w-4 shrink-0" /> : <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />}
             <span>{t.message}</span>
-            <button type="button" className="ml-1 text-fg-subtle hover:text-fg" onClick={() => setToasts((x) => x.filter((y) => y.id !== t.id))} aria-label="Dismiss">
+            <button type="button" className="ml-1 text-fg-subtle hover:text-fg" onClick={() => setToasts((x) => x.filter((y) => y.id !== t.id))} aria-label={i18n.t("common.dismiss")}>
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -46,6 +48,7 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Something went wrong.";
+/** The error's own message, else `fallback`, which callers pass translated. */
+export function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }

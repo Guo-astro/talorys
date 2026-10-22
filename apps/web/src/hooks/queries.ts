@@ -18,6 +18,7 @@ import type {
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { errorMessage, useToast } from "./toast";
+import { useI18n } from "../lib/i18n";
 
 export const keys = {
   settings: ["settings"] as const,
@@ -199,6 +200,7 @@ export function useApiMutation<TVars, TResult = unknown>(
 ) {
   const qc = useQueryClient();
   const toast = useToast();
+  const { t } = useI18n();
   return useMutation({
     mutationFn: fn,
     onSuccess: async (result, vars) => {
@@ -206,6 +208,6 @@ export function useApiMutation<TVars, TResult = unknown>(
       if (opts.success) toast(typeof opts.success === "function" ? opts.success(result) : opts.success);
       opts.onSuccess?.(result, vars);
     },
-    onError: (error) => toast(errorMessage(error), "error"),
+    onError: (error) => toast(errorMessage(error, t("common.somethingWentWrong")), "error"),
   });
 }

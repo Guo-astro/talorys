@@ -349,6 +349,7 @@ function MemoryHistorySection({ settings }: { settings: Settings }) {
 }
 
 function PrivacyTab() {
+  const { t } = useI18n();
   const toast = useToast();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -380,7 +381,7 @@ function PrivacyTab() {
       toast(`Imported ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ")}${notes.length ? `. ${notes.join("; ")}.` : ""}`);
       await qc.invalidateQueries();
     } catch (error) {
-      toast(error instanceof SyntaxError ? "That file is not valid JSON." : errorMessage(error), "error");
+      toast(error instanceof SyntaxError ? "That file is not valid JSON." : errorMessage(error, t("common.somethingWentWrong")), "error");
     } finally {
       setImporting(false);
       if (fileRef.current) fileRef.current.value = "";

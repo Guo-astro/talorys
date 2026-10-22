@@ -6,6 +6,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { ChatPage } from "./pages/ChatPage";
 import { Spinner, ErrorNotice } from "./components/ui";
 import { Logo } from "./components/Logo";
+import { useI18n } from "./lib/i18n";
 
 const MemoryPage = lazy(() => import("./pages/MemoryPage"));
 const TasksPage = lazy(() => import("./pages/TasksPage"));
@@ -18,6 +19,7 @@ function FullScreen({ children }: { children: React.ReactNode }) {
 }
 
 export function App() {
+  const { t } = useI18n();
   const { session, loading, error, refresh } = useSession();
 
   if (loading) {
@@ -33,7 +35,7 @@ export function App() {
       <FullScreen>
         <Logo className="h-10 w-10" />
         <div className="w-full max-w-sm">
-          <ErrorNotice error={error ?? new Error("Talorys is unreachable.")} onRetry={() => void refresh()} />
+          <ErrorNotice error={error ?? new Error(t("common.unreachable"))} onRetry={() => void refresh()} />
         </div>
       </FullScreen>
     );
