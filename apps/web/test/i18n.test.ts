@@ -26,7 +26,7 @@ describe("translate", () => {
     for (const [key, message] of Object.entries(en)) expect(message, key).not.toBe("");
   });
 
-  it("returns the Korean message and falls back to English for a missing key", () => {
+  it("returns the Korean message", () => {
     expect(translate("ko", "ko", "login.unlock")).toBe("잠금 해제");
     expect(translate("ko", "ko", "login.tryAgainIn", { seconds: 30 })).toBe("30초 뒤에 다시 시도");
     expect(translate("ko", "ko", "time.justNow")).toBe("방금");
