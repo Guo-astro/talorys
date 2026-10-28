@@ -349,6 +349,54 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX tal_task_plan_drafts_created ON tal_task_plan_drafts(created_at)`,
     ],
   },
+  {
+    version: 12,
+    name: "remote mcp servers",
+    statements: [
+      // Remote MCP servers the owner connected. `credential` is AES-GCM ciphertext (src/mcp/credentials.ts),
+      // never plaintext: a bearer token, or the OAuth record (tokens, client, PKCE verifier, pending state).
+      // `slug` names the server's tools and never changes after creation.
+      `CREATE TABLE tal_mcp_servers (
+        id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        auth_type TEXT NOT NULL DEFAULT 'none' CHECK (auth_type IN ('none','bearer','oauth')),
+        credential TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'disconnected' CHECK (status IN ('connected','auth_required','disconnected','error')),
+        last_error TEXT,
+        -- A pending OAuth sign-in the owner opens from Settings (not secret: the callback also needs the owner's session).
+        authorize_url TEXT,
+        authorize_expires TEXT,
+        discovered_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+      // The last discovered catalog. A tool reaches the model only while enabled and while its
+      // definition still matches the one the owner reviewed (`reviewed_hash`).
+      `CREATE TABLE tal_mcp_tools (
+        server_id TEXT NOT NULL REFERENCES tal_mcp_servers(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        exposed_name TEXT NOT NULL UNIQUE,
+        title TEXT,
+        description TEXT NOT NULL DEFAULT '',
+        input_schema TEXT NOT NULL,
+        annotations TEXT,
+        schema_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available','removed','invalid')),
+        invalid_reason TEXT,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        policy TEXT NOT NULL DEFAULT 'approve' CHECK (policy IN ('approve','auto')),
+        reviewed_hash TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (server_id, name)
+      )`,
+      // What an approved external call returned, so the model can see it in later turns.
+      `ALTER TABLE tal_pending_actions ADD COLUMN result TEXT`,
+    ],
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

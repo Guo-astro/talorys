@@ -32,6 +32,7 @@ export default defineConfig(async () => ({
           TALORYS_DEV_ORIGINS: "",
           OWNER_PASSWORD_HASH: await pbkdf2(TEST_PASSWORD),
           SESSION_SECRET: "test-session-secret-0123456789abcdefghijklmnop",
+          MCP_CREDENTIAL_KEY: "test-mcp-credential-key-0123456789abcdefghij",
           TEST_PASSWORD,
           ...(await vapidKeys()),
         },

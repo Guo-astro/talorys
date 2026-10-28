@@ -13,6 +13,7 @@ import { semanticRoutes } from "../semantic/routes";
 import { pushRoutes } from "../push/routes";
 import { remoteAuth } from "../remote/middleware";
 import { remoteRoutes } from "../remote/routes";
+import { mcpRoutes } from "../mcp/routes";
 
 export interface AppEnv {
   Bindings: { agent: TalorysAgent; env: Env };
@@ -48,6 +49,7 @@ export function createApi() {
   app.route("/", automationRoutes);
   app.route("/", pushRoutes);
   app.route("/", remoteRoutes);
+  app.route("/", mcpRoutes);
 
   return app;
 }

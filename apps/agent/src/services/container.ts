@@ -15,6 +15,7 @@ import { PushSubscriptionRepository } from "../push/repository";
 import { PushService } from "../push/service";
 import { RemoteTokenService } from "../remote/tokens";
 import { TaskPlanService } from "./task-plans";
+import { McpService } from "../mcp/service";
 
 /** All data services for the single owner, bound to one Durable Object's storage. */
 export interface Services {
@@ -36,6 +37,7 @@ export interface Services {
   push: PushService;
   remote: RemoteTokenService;
   taskPlans: TaskPlanService;
+  mcp: McpService;
 }
 
 /** `background` keeps work alive after the request or alarm that started it (the Durable Object's waitUntil). */
@@ -82,5 +84,6 @@ export function createServices(
     push,
     remote: new RemoteTokenService(db, settings, env.SESSION_SECRET),
     taskPlans: new TaskPlanService(db, tasks, projects, activity),
+    mcp: new McpService(db, env, activity),
   };
 }

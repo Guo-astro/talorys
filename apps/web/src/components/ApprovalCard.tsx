@@ -14,7 +14,7 @@ const APPROVAL_DONE: Record<Exclude<PendingAction["status"], "pending">, string>
   failed: "Approved, but it failed",
 };
 
-/** The only way a destructive action proposed by the agent can run. */
+/** The only way a destructive action, or an external MCP call that asks first, proposed by the agent can run. */
 export function ApprovalCard({ action: initial }: { action: PendingAction }) {
   const qc = useQueryClient();
   const [action, setAction] = useState(initial);
@@ -32,6 +32,7 @@ export function ApprovalCard({ action: initial }: { action: PendingAction }) {
     },
   );
   const status = action.status === "pending" && Date.parse(action.expires_at) <= Date.now() ? "expired" : action.status;
+  const external = action.kind === "external";
 
   if (status !== "pending") {
     return (
@@ -44,6 +45,7 @@ export function ApprovalCard({ action: initial }: { action: PendingAction }) {
         <span className="min-w-0 break-words">
           <span className="text-fg">{action.summary}</span> · {APPROVAL_DONE[status]}
           {status === "failed" && action.error ? `: ${action.error}` : ""}
+          {action.result && <span className="mt-1 block whitespace-pre-wrap text-xs text-fg-subtle">{action.result}</span>}
         </span>
       </div>
     );
@@ -54,16 +56,18 @@ export function ApprovalCard({ action: initial }: { action: PendingAction }) {
         <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <div className="min-w-0">
           <p className="break-words font-medium text-fg">{action.summary}?</p>
-          <p className="text-xs text-fg-muted">Nothing changes unless you approve.</p>
+          <p className="text-xs text-fg-muted">
+            {external ? "This sends the details below to an external service. Talorys can't undo what it does there." : "Nothing changes unless you approve."}
+          </p>
         </div>
       </div>
       {action.preview !== undefined && (
         <div className="mt-2">
-          <p className="text-xs font-medium text-fg-muted">New text, in full</p>
+          <p className="text-xs font-medium text-fg-muted">{external ? "What it will send" : "New text, in full"}</p>
           {/* Plain text, never rendered as Markdown: this is exactly what will be saved. */}
           <div
             role="region"
-            aria-label="Proposed text"
+            aria-label={external ? "Arguments to send" : "Proposed text"}
             // biome-ignore lint/a11y/noNoninteractiveTabindex: lets keyboard users scroll a long proposal.
             tabIndex={0}
             className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-subtle p-2 text-xs text-fg"

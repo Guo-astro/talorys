@@ -7,11 +7,14 @@ import {
   TALORYS_VERSION,
   backupSchema,
   languagePreferenceSchema,
+  MAX_MCP_SERVERS,
+  MCP_AUTH_TYPES,
   scheduleSpecSchema,
 } from "@talorys/shared";
 import type { Services } from "./container";
 import { ValidationError } from "../api/errors";
 import { decodeTools } from "../db/repositories/conversations";
+import { validateEndpoint } from "../mcp/url";
 
 /**
  * Settings a backup may never change: they control cost and model behaviour, and a
@@ -41,6 +44,8 @@ export function exportData(s: Services): Backup {
       automations: db
         .all<Record<string, unknown>>(`SELECT id, name, kind, message, schedule, enabled, created_at, updated_at FROM tal_automations`)
         .map((a) => ({ ...a, schedule: JSON.parse(String(a.schedule)), enabled: a.enabled === 1 })),
+      // Where each server is and how it authenticates; never the credential, a session or tool choices.
+      mcp_servers: db.all(`SELECT id, name, url, auth_type, created_at FROM tal_mcp_servers ORDER BY created_at`),
     },
   } as unknown as Backup;
 }
@@ -55,6 +60,8 @@ export interface ImportSummary {
   automations: number;
   /** Imported automations always arrive paused; the owner enables them. */
   automations_paused: number;
+  /** Imported MCP servers arrive disabled, without credentials or enabled tools. */
+  mcp_servers: number;
   ignored_settings: string[];
 }
 
@@ -180,6 +187,27 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
       );
       automations++;
     }
+    let mcpServers = 0;
+    for (const m of d.mcp_servers) {
+      // An imported server never connects or exposes a tool on its own: it arrives disabled, with no
+      // credential and no tools, and an existing server keeps the owner's version. Unsafe URLs are skipped.
+      if (db.one(`SELECT 1 AS x FROM tal_mcp_servers WHERE id = ?`, m.id) || s.mcp.repo.count() >= MAX_MCP_SERVERS) continue;
+      let url: string;
+      try {
+        url = validateEndpoint(m.url, { development: false }).href;
+      } catch {
+        continue;
+      }
+      s.mcp.repo.create({
+        id: m.id,
+        name: m.name.slice(0, 64),
+        url,
+        auth_type: pick(m.auth_type, MCP_AUTH_TYPES, "none"),
+        enabled: false,
+        created_at: str(m.created_at, now),
+      });
+      mcpServers++;
+    }
     const settings: Record<string, unknown> = { ...d.settings };
     const ignored = IMPORT_IGNORED_SETTINGS.filter((key) => key in settings);
     for (const key of ignored) delete settings[key];
@@ -198,6 +226,7 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
       projects: d.projects.length,
       automations,
       automations_paused: automations,
+      mcp_servers: mcpServers,
       ignored_settings: [...ignored],
     };
   });

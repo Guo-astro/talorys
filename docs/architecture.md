@@ -136,6 +136,29 @@ duplicate-call (loop) detection, owner approval for destructive actions
 scheduled runs. Tools only use the service layer — no
 shell, code execution, network or credentials.
 
+Tools from remote MCP servers (`apps/agent/src/mcp/`) are adapted into the
+same `ToolDefinition` shape and appended after the built-in (or semantic)
+tools, so they can never shadow one; built-in names may not start with the
+reserved `mcp_` prefix. The owner enables tools per server. A tool set to run
+without asking becomes a `read` tool; every other enabled tool becomes a
+`destructive` one whose `commit` makes the call after approval, with the
+approval bound to a hash of the server and tool permission state. Their JSON
+Schema inputs are converted to Zod (`z.fromJSONSchema`), so validation, the
+call budget, per-tool caps and duplicate detection all apply. External tools
+carry an `external` marker and `ToolExecutor` never offers them outside chat.
+`McpService` keeps configuration and the last discovered catalog in SQLite
+(`tal_mcp_servers`, `tal_mcp_tools`, migration 12) and opens Streamable HTTP
+sessions on demand with the official MCP client through a guarded `fetch`
+(origin lock, credential injection, no redirects, size limits). OAuth servers
+use the SDK's OAuth client through `TalorysOAuthProvider` (`mcp/oauth.ts`),
+whose state lives encrypted in the server's `credential` column; the
+authorization server's origin is admitted by the same guard after the endpoint
+and DNS checks. The browser returns to the SPA page `/settings/mcp-oauth`, which
+posts the code and state to `POST /api/mcp/oauth/callback`. It does not use
+the Agents SDK's `MCPClientManager`, which would store connection headers in
+plain text and reconnect servers on wake outside those checks. See
+[mcp.md](mcp.md).
+
 `propose_task_plan` (a `write` tool, so never offered to scheduled runs, once per
 turn) is neither immediate nor destructive in effect: it validates the model's
 proposal with the shared Zod schema (`packages/shared/src/plans.ts`), drops

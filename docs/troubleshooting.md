@@ -53,3 +53,8 @@ directory. Stop stray `wrangler` processes; the dev scripts use separate
 directories for the Worker and Pages.
 
 **Port already in use** — stop other dev servers on 5173, 8787 or 8788.
+
+## MCP servers
+
+See [Remote MCP servers → Troubleshooting](mcp.md#troubleshooting) for
+connection, authentication and tool messages.

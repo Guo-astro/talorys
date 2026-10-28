@@ -33,6 +33,7 @@ Or install it with [Appflare](https://appflare.dev), which deploys it as a
 - **AI task planning** — describe a goal ("Plan the tasks to launch my iOS app next month") and Talorys proposes a plan as an interactive card in chat. Review, edit or remove tasks, pick a project, then confirm: nothing is created until you do, and confirming creates everything at once, exactly once.
 - **Automations** — one-time and recurring reminders, daily task digests and optional AI routines, delivered to an in-app notification center. They run on Durable Object alarms, so nothing has to stay online.
 - **Push notifications** — reminders, digests and routines also arrive as system notifications on the phones and computers you turn them on for, even when Talorys is closed (Settings → General). Uses standard Web Push, encrypted end to end; on iPhone and iPad, add Talorys to the Home Screen first.
+- **Remote MCP servers (optional)** — connect remote [MCP](https://modelcontextprotocol.io) servers in Settings → Integrations (no auth, a bearer token, or OAuth sign-in) and choose which of their tools Talorys may use. Tools start off, and calls that may change something wait for your approval. Not used by scheduled routines. See [docs/mcp.md](docs/mcp.md).
 - **Single-user by design** — no signup, no accounts, no teams. The installer sets the owner password.
 - **Works without AI** — tasks, notes, memories and reminders keep working if Workers AI is unavailable or your free quota is used up.
 
@@ -147,6 +148,11 @@ advertising code and sends nothing to its developers.
 Cloudflare processes your data to provide its services — including running
 Workers AI inference on your chat messages and the relevant memories included
 in each prompt. Review Cloudflare's privacy policy and Workers AI terms.
+
+If you connect a remote MCP server, calling one of its tools sends that call's
+arguments to the server, outside your Cloudflare account. Nothing is sent to an
+MCP server unless you connected it and turned the tool on. See
+[docs/mcp.md](docs/mcp.md#privacy).
 
 Security model and threat mitigations: [docs/security.md](docs/security.md).
 

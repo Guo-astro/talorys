@@ -17,6 +17,15 @@ export interface Env {
   VAPID_PRIVATE_KEY?: string;
   /** Contact sent to push services ("mailto:..." or "https://..."). Defaults to the app's own URL. */
   VAPID_SUBJECT?: string;
+  /**
+   * Random secret that encrypts remote MCP server credentials at rest. Worker secret, set by the
+   * installer. Without it, servers that need a bearer token can't be added; nothing else changes.
+   */
+  MCP_CREDENTIAL_KEY?: string;
+  /** "off" turns remote MCP servers off for this deployment. */
+  TALORYS_MCP?: string;
+  /** Most MCP tools enabled at once (default 20, at most 64). */
+  TALORYS_MCP_MAX_TOOLS?: string;
   /** "development" enables local-only conveniences (mock AI, http cookies). Never set in production. */
   TALORYS_ENV?: string;
   /** Development only: use the deterministic mock AI provider. */

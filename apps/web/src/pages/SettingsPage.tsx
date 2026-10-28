@@ -7,6 +7,7 @@ import { Badge, Button, Card, ConfirmDialog, ErrorNotice, Input, Label, PageHead
 import { SemanticRecallCard } from "../components/SemanticRecallCard";
 import { PushNotificationsCard } from "../components/PushNotificationsCard";
 import { RemoteAccessCard } from "../components/RemoteAccessCard";
+import { McpServersCard } from "../components/McpServersCard";
 import { UsageBreakdown, UsagePricingNote } from "../components/UsageBreakdown";
 import { keys, useApiMutation, useSessions, useSettings, useSystemInfo, useUpdateStatus, useUsage } from "../hooks/queries";
 import { useSession } from "../hooks/session";
@@ -16,7 +17,7 @@ import { applyTheme } from "../lib/theme";
 import { cn, relativeTime } from "../lib/utils";
 import { applyLanguage, browserLanguage, LANGUAGE_NAMES, useI18n } from "../lib/i18n";
 
-const TABS = ["General", "AI", "Privacy", "Security", "About"] as const;
+const TABS = ["General", "AI", "Privacy", "Security", "Integrations", "About"] as const;
 type Tab = (typeof TABS)[number];
 
 function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
@@ -80,6 +81,7 @@ export default function SettingsPage() {
           {tab === "AI" && <AiTab settings={settings} />}
           {tab === "Privacy" && <PrivacyTab />}
           {tab === "Security" && <SecurityTab />}
+          {tab === "Integrations" && <McpServersCard />}
           {tab === "About" && <AboutTab settings={settings} />}
         </div>
       )}
@@ -369,13 +371,14 @@ function PrivacyTab() {
     try {
       if (file.size > 25 * 1024 * 1024) throw new Error("Backup file is larger than 25 MB.");
       const json = JSON.parse(await file.text());
-      const r = await api<{ imported: Record<string, number> & { automations_paused: number; ignored_settings: string[] } }>("/import", {
+      const r = await api<{ imported: Record<string, number> & { automations_paused: number; mcp_servers?: number; ignored_settings: string[] } }>("/import", {
         method: "POST",
         body: json,
       });
-      const { automations_paused, ignored_settings, ...counts } = r.imported;
+      const { automations_paused, mcp_servers, ignored_settings, ...counts } = r.imported;
       const notes = [
         automations_paused ? `${automations_paused} automation(s) imported paused — enable them in Automations` : "",
+        mcp_servers ? `${mcp_servers} MCP server(s) imported turned off — review them in Settings → Integrations` : "",
         ignored_settings.length ? `kept your current ${ignored_settings.join(", ")} settings` : "",
       ].filter(Boolean);
       toast(`Imported ${Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ")}${notes.length ? `. ${notes.join("; ")}.` : ""}`);

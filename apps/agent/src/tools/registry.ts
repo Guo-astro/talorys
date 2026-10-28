@@ -12,6 +12,8 @@ export interface ToolContext {
   mode: "chat" | "scheduled";
   /** The chat conversation, which owns any destructive actions proposed during the turn. */
   conversationId?: string;
+  /** Aborts when the owner stops the turn; tools that wait on the network should honour it. */
+  signal?: AbortSignal;
 }
 
 /** The exact target of a destructive call, resolved before anything changes. */
@@ -33,6 +35,8 @@ interface BaseTool<S extends z.ZodType> {
   maxCallsPerTurn?: number;
   /** Short human-readable label for the UI, e.g. "Adding task “Buy milk”". */
   label: (input: z.infer<S>) => string;
+  /** Set on tools from a remote MCP server. They are offered in chat only, never in scheduled runs. */
+  external?: { serverId: string };
 }
 
 export interface ImmediateTool<S extends z.ZodType = z.ZodType, R = unknown> extends BaseTool<S> {
@@ -103,10 +107,10 @@ export class ToolExecutor {
     return this.calls >= this.limits.maxToolCalls;
   }
 
-  /** Tools permitted in this context. Scheduled runs never get write or destructive tools. */
+  /** Tools permitted in this context. Scheduled runs never get write, destructive or external tools. */
   available(): ToolDefinition[] {
     if (this.limits.maxToolCalls <= 0) return [];
-    return this.tools.filter((t) => this.ctx.mode === "chat" || t.permission === "read" || t.name === "notify_owner");
+    return this.tools.filter((t) => this.ctx.mode === "chat" || (!t.external && (t.permission === "read" || t.name === "notify_owner")));
   }
 
   find(name: string): ToolDefinition | undefined {
@@ -221,7 +225,15 @@ export async function runApprovedAction(tools: ToolDefinition[], ctx: ToolContex
     if (!stored.target_version || version !== stored.target_version) {
       throw new ToolError("This item changed after it was proposed, so nothing was done. Ask again to get a new approval.");
     }
-    await tool.commit(stored.target_id, ctx, stored.payload === null ? undefined : JSON.parse(stored.payload));
+    const payload = stored.payload === null ? undefined : JSON.parse(stored.payload);
+    // Re-validated against the tool's current schema: the arguments must still be what the tool accepts.
+    if (payload !== undefined && tool.external && !tool.input.safeParse(payload).success) {
+      throw new ToolError("This tool's inputs changed after it was proposed, so nothing was sent. Ask again to get a new approval.");
+    }
+    const outcome = await tool.commit(stored.target_id, ctx, payload);
+    if (tool.external && outcome && typeof outcome === "object" && "external_result" in outcome && typeof outcome.external_result === "string") {
+      pending.setResult(actionId, outcome.external_result);
+    }
   } catch (error) {
     pending.markFailed(actionId, error instanceof ToolError ? error.message : "The action failed.");
     if (!(error instanceof ToolError)) console.error("Approved action failed", error);

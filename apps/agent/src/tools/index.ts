@@ -1,3 +1,4 @@
+import { MCP_TOOL_PREFIX } from "@talorys/shared";
 import type { ToolDefinition } from "./registry";
 import { taskTools } from "./tasks";
 import { noteTools, projectTools } from "./notes";
@@ -25,6 +26,8 @@ export const ALL_TOOLS: ToolDefinition[] = [
 const names = new Set<string>();
 for (const t of ALL_TOOLS) {
   if (names.has(t.name)) throw new Error(`Duplicate tool name: ${t.name}`);
+  // The prefix is reserved for remote MCP tools, so they can never take a built-in tool's name.
+  if (t.name.startsWith(MCP_TOOL_PREFIX)) throw new Error(`Built-in tool names can't start with ${MCP_TOOL_PREFIX}: ${t.name}`);
   names.add(t.name);
 }
 

@@ -125,6 +125,16 @@ function planTools(text: string): PlannedCall[] {
       },
     ];
   }
+  if ((m = text.match(/^call (mcp_\w+)(?:\s+(\{.*\}))?$/is))) {
+    // Exercises a remote MCP tool end to end: "call mcp_docs_search {"query":"x"}".
+    let input: unknown = {};
+    try {
+      input = m[2] ? JSON.parse(m[2]) : {};
+    } catch {
+      input = { raw: m[2] };
+    }
+    return [{ name: m[1]!, input, describe: (out) => `MCP result:\n\n\`\`\`json\n${JSON.stringify(out, null, 2).slice(0, 1500)}\n\`\`\`` }];
+  }
   if ((m = text.match(/^(?:search|find)\s+(.+)$/i))) {
     return [{ name: "search", input: { query: m[1] }, describe: (out) => `Search results:\n\n\`\`\`json\n${JSON.stringify(out, null, 2).slice(0, 1500)}\n\`\`\`` }];
   }

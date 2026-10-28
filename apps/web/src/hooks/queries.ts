@@ -3,6 +3,8 @@ import type {
   AutomationRun,
   Conversation,
   ChatMessage,
+  McpServerInfo,
+  McpToolInfo,
   Memory,
   MemoryHistory,
   MemoryReview,
@@ -38,6 +40,8 @@ export const keys = {
   update: ["system", "update"] as const,
   remoteStatus: ["remote", "status"] as const,
   remoteTokens: ["remote", "tokens"] as const,
+  mcpServers: ["mcp", "servers"] as const,
+  mcpTools: (id: string) => ["mcp", "tools", id] as const,
 };
 
 export function useSettings() {
@@ -189,6 +193,25 @@ export function useRemoteStatus() {
 
 export function useRemoteTokens() {
   return useQuery({ queryKey: keys.remoteTokens, queryFn: () => api<{ tokens: RemoteTokenInfo[] }>("/remote/tokens").then((r) => r.tokens) });
+}
+
+export interface McpOverview {
+  enabled: boolean;
+  credentials_available: boolean;
+  max_tools: number;
+  servers: McpServerInfo[];
+}
+
+export function useMcpServers() {
+  return useQuery({ queryKey: keys.mcpServers, queryFn: () => api<McpOverview>("/mcp/servers") });
+}
+
+export function useMcpTools(serverId: string | null) {
+  return useQuery({
+    queryKey: keys.mcpTools(serverId ?? ""),
+    queryFn: () => api<{ tools: McpToolInfo[] }>(`/mcp/servers/${serverId}/tools`).then((r) => r.tools),
+    enabled: !!serverId,
+  });
 }
 
 /**

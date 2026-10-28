@@ -157,7 +157,7 @@ export function clientId(c: Context<AppEnv>): string {
   return clientKey(c.req.header("cf-connecting-ip") ?? "local");
 }
 
-function ipv4Octets(text: string): number[] | null {
+export function ipv4Octets(text: string): number[] | null {
   const parts = text.split(".");
   if (parts.length !== 4) return null;
   const octets: number[] = [];
@@ -171,7 +171,7 @@ function ipv4Octets(text: string): number[] | null {
 }
 
 /** Eight hextets, or null when `addr` is not an IPv6 address. A trailing dotted quad is two hextets. */
-function expandIPv6(addr: string): number[] | null {
+export function expandIPv6(addr: string): number[] | null {
   const halves = addr.split("::");
   if (halves.length > 2) return null;
   const pieces = (half: string): number[] | null => {

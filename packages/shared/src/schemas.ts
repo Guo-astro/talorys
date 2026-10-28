@@ -114,6 +114,10 @@ export interface PendingAction {
   expires_at: string;
   /** Exact text the action will write (e.g. a note's replacement), shown in full on the approval card. */
   preview?: string;
+  /** "external": a call to a connected MCP server, whose `preview` is the arguments it will receive. */
+  kind?: "external";
+  /** What an approved external call returned, shortened. Untrusted third-party content. */
+  result?: string;
 }
 
 export interface ToolActivity {
@@ -143,6 +147,8 @@ export const toolActivitySchema = z.object({
       error: z.string().nullable(),
       expires_at: z.string(),
       preview: z.string().optional(),
+      kind: z.literal("external").optional(),
+      result: z.string().optional(),
     })
     .optional(),
   plan: taskPlanDraftSchema.optional(),
@@ -385,6 +391,8 @@ export const backupSchema = z.object({
     notes: z.array(backupEntity({ id, title: z.string(), content: z.string(), created_at: z.string(), updated_at: z.string() })).default([]),
     projects: z.array(backupEntity({ id, name: z.string(), created_at: z.string(), updated_at: z.string() })).default([]),
     automations: z.array(backupEntity({ id, name: z.string(), kind: z.string(), schedule: z.unknown() })).default([]),
+    /** Connection details only: no credentials, sessions or tool choices. Imported servers arrive disabled. */
+    mcp_servers: z.array(backupEntity({ id, name: z.string(), url: z.string(), auth_type: z.string() })).default([]),
   }),
 });
 export type Backup = z.infer<typeof backupSchema>;

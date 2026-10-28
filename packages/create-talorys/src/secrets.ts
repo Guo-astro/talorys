@@ -7,6 +7,8 @@ export const SESSION_SECRET = "SESSION_SECRET";
 export const REQUIRED_SECRETS = [PASSWORD_SECRET, SESSION_SECRET] as const;
 /** Web Push (VAPID) key pair. Optional: without it the app works, only push notifications are off. */
 export const PUSH_SECRETS = ["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY"] as const;
+/** Encrypts remote MCP server credentials at rest. Optional: without it only servers without authentication can be added. */
+export const MCP_SECRET = "MCP_CREDENTIAL_KEY";
 
 export function validatePassword(password: string | undefined): string | undefined {
   if (!password) return "Please enter a password.";

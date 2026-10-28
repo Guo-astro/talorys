@@ -104,7 +104,12 @@ export class TalorysAgent extends Agent<Env, AgentState> {
   }
 
   runner(): AgentRunner {
-    return new AgentRunner(this.services, this.aiProvider(), semanticExtensions(this.services, this.env, (work) => this.ctx.waitUntil(work)));
+    return new AgentRunner(
+      this.services,
+      this.aiProvider(),
+      semanticExtensions(this.services, this.env, (work) => this.ctx.waitUntil(work)),
+      this.services.mcp.chatTools(),
+    );
   }
 
   refreshUnread(): void {

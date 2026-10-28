@@ -87,8 +87,10 @@ the Worker for every route except `GET /api/health`, `POST /api/auth/login` and
   automatic retries are off so no call goes uncounted. A scheduled AI run and an
   embedding request are also counted before the call, so concurrent requests
   cannot overrun their caps.
-- No shell, code execution, outbound HTTP, credentials or deployment tools exist.
-  Web Push sends are made by the notification service, never by a tool.
+- No shell, code execution, credentials or deployment tools exist, and no
+  built-in tool makes outbound HTTP requests. Web Push sends are made by the
+  notification service, never by a tool. The only tools that reach the network
+  are remote MCP tools the owner connected and turned on (below).
 
 ## Push notifications
 
@@ -127,6 +129,8 @@ does on its own:
 - Imported messages are marked as imported. Retry refuses them, and recorded
   approvals are stripped, so they never count as the owner's input.
 - Malformed tool activity is dropped instead of breaking the chat view.
+- MCP servers arrive turned off, with no credential and no enabled tools; an
+  existing server is never changed, and unsafe URLs are skipped.
 
 ## Installer
 
@@ -156,6 +160,39 @@ Optional machine-client access with named personal access tokens (`tal_…`).
 - Failed-Bearer throttling is keyed by client IP (`CF-Connecting-IP`; IPv6 by /64) and is separate from browser login lockout. Soft per-token rate limits (in-memory; reset on Durable Object restart) return **429** with `Retry-After`.
 - Mutations are attributed in the activity log by token name/id prefix (no bodies or credentials), coalesced to at most one `remote.request` row per token per 15-minute window; write volume is also counted per token per day. Memories created via Bearer use source `remote`.
 - Bearer cannot create or change `agent_prompt` automations (403); see [Remote access](remote-access.md).
+
+## Remote MCP servers
+
+Optional. Full details: [Remote MCP servers](mcp.md#security-model).
+
+- Managed only from an owner session (`/api/mcp`, CSRF-protected). Access tokens
+  are refused, and no tool can add servers or turn tools on.
+- Discovered tools start off. An enabled tool either asks for approval on every
+  call (the default, through the same pending-action flow as deletions, bound to
+  the exact arguments and the tool's permission state) or, if the owner chooses,
+  runs without asking. Server annotations such as `readOnlyHint` are shown but
+  never trusted.
+- MCP tools are never offered to scheduled runs: the runner doesn't load them,
+  and the executor drops external tools outside chat.
+- Bearer tokens and OAuth sign-ins (tokens, client registration, PKCE verifier)
+  are AES-256-GCM encrypted under `MCP_CREDENTIAL_KEY`, bound to the server id,
+  sent only to the configured origin, and never returned, logged, sent to the
+  model or exported.
+- OAuth uses the authorization code flow with PKCE as a public client. The
+  state is random, server-bound, single use and expires in 10 minutes; the
+  callback is finished by an app page that posts it with the owner's session
+  and CSRF header. Authorization servers must pass the same endpoint checks as
+  MCP servers, and the access token is never sent to them.
+- Endpoints must be public `https://` hosts. Private, loopback, link-local,
+  metadata and reserved addresses are refused, both as literals and as DNS
+  answers (checked over DNS-over-HTTPS before each new connection). Redirects
+  are refused, and every request must stay on the configured origin.
+- Calls share the turn's tool budget, per-tool caps and duplicate detection, and
+  are bounded by timeouts and response-size limits. Results and descriptions are
+  marked as untrusted third-party data in the prompt.
+- A changed tool definition hides the tool until the owner reviews it again.
+- Backups carry only server names, URLs and auth types; imported servers arrive
+  turned off, without credentials or tools.
 
 ## Reporting
 

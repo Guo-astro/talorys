@@ -25,7 +25,7 @@ describe("installer: fresh installation", () => {
     const worker = state.workers.acc1![manifest.worker_name]!;
     expect(worker.workers_dev).toBe(false);
     expect(worker.migrations).toEqual([{ tag: "v1", new_sqlite_classes: ["TalorysAgent"] }]);
-    expect(Object.keys(worker.secrets).sort()).toEqual(["OWNER_PASSWORD_HASH", "SESSION_SECRET", "VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY"]);
+    expect(Object.keys(worker.secrets).sort()).toEqual(["MCP_CREDENTIAL_KEY", "OWNER_PASSWORD_HASH", "SESSION_SECRET", "VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY"]);
     expect(worker.secrets.VAPID_PUBLIC_KEY!.length).toBe(87);
     expect(worker.secrets.OWNER_PASSWORD_HASH!.prefix).toBe("pbkdf2-sha256$");
     expect(worker.secrets.SESSION_SECRET!.length).toBeGreaterThanOrEqual(43);
@@ -152,7 +152,7 @@ describe("installer: idempotency and recovery", () => {
     const ui = new ScriptedUi([STRONG_PASSWORD, STRONG_PASSWORD, true]);
     const m = await install({ dir: sb.dir, ...FAST }, { ui, wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
     expect(m.status).toBe("deployed");
-    expect(Object.keys(sb.state().workers.acc1![m.worker_name]!.secrets)).toHaveLength(4);
+    expect(Object.keys(sb.state().workers.acc1![m.worker_name]!.secrets)).toHaveLength(5);
   });
 
   it("waits for propagation and succeeds once the site responds", async () => {
@@ -224,8 +224,26 @@ describe("installer: upgrades and password reset", () => {
     const after = sb.state().workers.acc1![first.worker_name]!.secrets;
     expect(after.OWNER_PASSWORD_HASH).toEqual(before.OWNER_PASSWORD_HASH);
     expect(after.SESSION_SECRET).toEqual(before.SESSION_SECRET);
-    expect(Object.keys(after).sort()).toEqual(["OWNER_PASSWORD_HASH", "SESSION_SECRET", "VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY"]);
+    expect(Object.keys(after).sort()).toEqual(["MCP_CREDENTIAL_KEY", "OWNER_PASSWORD_HASH", "SESSION_SECRET", "VAPID_PRIVATE_KEY", "VAPID_PUBLIC_KEY"]);
     expect(ui.prompts).toEqual([]);
+  });
+
+  it("adds the MCP credential key to an older installation and keeps an existing one", async () => {
+    const sb = makeSandbox();
+    const first = await install({ dir: sb.dir, ...FAST }, { ui: new ScriptedUi(freshAnswers()), wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    const original = sb.state().workers.acc1![first.worker_name]!.secrets.MCP_CREDENTIAL_KEY;
+    expect(original).toBeTruthy();
+    await install({ dir: sb.dir, mode: "update", yes: true, ...FAST }, { ui: new ScriptedUi([]), wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    expect(sb.state().workers.acc1![first.worker_name]!.secrets.MCP_CREDENTIAL_KEY).toEqual(original);
+    sb.update((s) => {
+      delete s.workers.acc1![first.worker_name]!.secrets.MCP_CREDENTIAL_KEY;
+    });
+    const before = sb.state().workers.acc1![first.worker_name]!.secrets;
+    await install({ dir: sb.dir, mode: "update", yes: true, ...FAST }, { ui: new ScriptedUi([]), wrangler: sb.wrangler(), fetch: fakeSite(), templates: sb.templates });
+    const after = sb.state().workers.acc1![first.worker_name]!.secrets;
+    expect(after.MCP_CREDENTIAL_KEY).toBeTruthy();
+    expect(after.VAPID_PRIVATE_KEY).toEqual(before.VAPID_PRIVATE_KEY);
+    expect(after.SESSION_SECRET).toEqual(before.SESSION_SECRET);
   });
 
   it("update requires an existing installation", async () => {

@@ -435,7 +435,7 @@ describe("persistence", () => {
       const task = a.services.tasks.create({ title: uniq("pre-existing") });
       // Re-running every migration is a no-op on an up-to-date database.
       expect(migrate(db)).toBe(MIGRATIONS.at(-1)!.version);
-      expect(MIGRATIONS.at(-1)).toMatchObject({ version: 11, name: "task plan drafts" });
+      expect(MIGRATIONS.find((m) => m.version === 11)).toMatchObject({ name: "task plan drafts" });
       expect(a.services.tasks.get(task.id)?.title).toBe(task.title);
       expect(db.one(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tal_task_plan_drafts'`)).not.toBeNull();
     });
@@ -446,7 +446,7 @@ describe("persistence", () => {
       const s = a.services;
       await propose(s, { title: "Backup", tasks: [{ title: uniq("A") }, { title: uniq("B") }] });
       const backup = exportData(s);
-      expect(Object.keys(backup.data).sort()).toEqual(["automations", "conversations", "memories", "messages", "notes", "projects", "settings", "tasks"]);
+      expect(Object.keys(backup.data).sort()).toEqual(["automations", "conversations", "mcp_servers", "memories", "messages", "notes", "projects", "settings", "tasks"]);
       expect(JSON.stringify(backup.data)).not.toContain("tal_task_plan_drafts");
     });
     const c = await loggedIn();

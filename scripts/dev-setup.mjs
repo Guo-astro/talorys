@@ -1,5 +1,5 @@
 // Creates local-only development secrets (apps/agent/.dev.vars) if missing, and adds a Web Push
-// key pair to a file made before push existed (everything else in it is left as is).
+// key pair and an MCP credential key to a file made before they existed (everything else in it is left as is).
 // The dev password defaults to "talorys-dev-password" or $TALORYS_DEV_PASSWORD.
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { webcrypto as crypto } from "node:crypto";
@@ -30,6 +30,11 @@ async function vapidKeys() {
   return [`VAPID_PUBLIC_KEY=${publicKey}`, `VAPID_PRIVATE_KEY=${d}`];
 }
 
+/** Encrypts remote MCP server credentials at rest. */
+function mcpKey() {
+  return `MCP_CREDENTIAL_KEY=${b64url(crypto.getRandomValues(new Uint8Array(32)))}`;
+}
+
 /** True when `name=` has a non-empty value in a .dev.vars file. */
 function hasVar(text, name) {
   return new RegExp(`^${name}=\\S`, "m").test(text);
@@ -37,13 +42,18 @@ function hasVar(text, name) {
 
 if (existsSync(target) && !force) {
   const current = readFileSync(target, "utf8");
-  if (hasVar(current, "VAPID_PUBLIC_KEY") && hasVar(current, "VAPID_PRIVATE_KEY")) {
+  let next = current;
+  if (!hasVar(next, "VAPID_PUBLIC_KEY") || !hasVar(next, "VAPID_PRIVATE_KEY")) {
+    // Half a pair is unusable, so drop any leftover key line and add a fresh, matching pair.
+    next = next.split("\n").filter((line) => !/^VAPID_(PUBLIC|PRIVATE)_KEY=/.test(line)).join("\n").replace(/\n*$/, "\n");
+    next += `${(await vapidKeys()).join("\n")}\n`;
+  }
+  if (!hasVar(next, "MCP_CREDENTIAL_KEY")) next = `${next.replace(/\n*$/, "\n")}${mcpKey()}\n`;
+  if (next === current) {
     console.log("apps/agent/.dev.vars exists (use --force to regenerate).");
   } else {
-    // Half a pair is unusable, so drop any leftover key line and add a fresh, matching pair.
-    const kept = current.split("\n").filter((line) => !/^VAPID_(PUBLIC|PRIVATE)_KEY=/.test(line)).join("\n").replace(/\n*$/, "\n");
-    writeFileSync(target, `${kept}${(await vapidKeys()).join("\n")}\n`);
-    console.log("Added a Web Push key pair to apps/agent/.dev.vars.");
+    writeFileSync(target, next);
+    console.log("Added missing keys to apps/agent/.dev.vars.");
   }
 } else {
   const password = process.env.TALORYS_DEV_PASSWORD || "talorys-dev-password";
@@ -58,6 +68,7 @@ if (existsSync(target) && !force) {
       `OWNER_PASSWORD_HASH=${await hash(password)}`,
       `SESSION_SECRET=${b64url(crypto.getRandomValues(new Uint8Array(32)))}`,
       ...(await vapidKeys()),
+      mcpKey(),
       "",
     ].join("\n"),
   );
