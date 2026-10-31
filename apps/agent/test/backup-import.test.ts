@@ -96,6 +96,55 @@ describe("backup import treats the file as untrusted", () => {
     }
   });
 
+  it("does not revert a conversation renamed after the backup was made", async () => {
+    const c = await loggedIn();
+    const { conversation } = await c.json("/api/conversations", { method: "POST", body: { title: "New conversation" } });
+    try {
+      // A copy dated between the creation and the rename: the older title must not come back.
+      const between = new Date(new Date(conversation.created_at).getTime() + 1).toISOString();
+      const backup = backupOf({
+        conversations: [{ id: conversation.id, title: "Old title", created_at: at(0), updated_at: between }],
+      });
+      await c.json(`/api/conversations/${conversation.id}`, { method: "PATCH", body: { title: "My new name" } });
+      await c.json("/api/import", { method: "POST", body: backup });
+      expect((await c.json(`/api/conversations/${conversation.id}`)).conversation.title).toBe("My new name");
+
+      // A copy newer than the local rename still imports.
+      const newer = new Date(Date.now() + 60_000).toISOString();
+      await c.json("/api/import", {
+        method: "POST",
+        body: backupOf({ conversations: [{ id: conversation.id, title: "Newer backup title", created_at: at(0), updated_at: newer }] }),
+      });
+      expect((await c.json(`/api/conversations/${conversation.id}`)).conversation.title).toBe("Newer backup title");
+    } finally {
+      await c.call(`/api/conversations/${conversation.id}`, { method: "DELETE" });
+    }
+  });
+
+  it("keeps row-level last-writer-wins when a message, not a rename, moved updated_at", async () => {
+    const c = await loggedIn();
+    const { conversation } = await c.json("/api/conversations", { method: "POST", body: { title: "New conversation" } });
+    try {
+      await c.json(`/api/conversations/${conversation.id}`, { method: "PATCH", body: { title: "My new name" } });
+      // ConversationRepository.touch() bumps updated_at on every new message; the row's
+      // activity, not the rename, decides the import. Simulate a message that arrived
+      // after the rename so the row is newer than the local title change.
+      const touched = new Date(Date.now() + 60_000).toISOString();
+      await inAgent((a) => a.services.db.run(`UPDATE tal_conversations SET updated_at = ? WHERE id = ?`, touched, conversation.id));
+      // A backup exported after that message carries the pre-rename title but a newer
+      // updated_at, so the old title comes back. This pins the documented behaviour in
+      // importData: if renames must win on their own, they need a separate timestamp.
+      const afterMessage = new Date(Date.now() + 120_000).toISOString();
+      await c.json("/api/import", {
+        method: "POST",
+        body: backupOf({ conversations: [{ id: conversation.id, title: "Old title", created_at: at(0), updated_at: afterMessage }] }),
+      });
+      expect((await c.json(`/api/conversations/${conversation.id}`)).conversation.title).toBe("Old title");
+    } finally {
+      await c.call(`/api/conversations/${conversation.id}`, { method: "DELETE" });
+    }
+  });
+
   it("keeps well-formed tool activity, including approvals, and drops only malformed entries", () => {
     const ok = { id: "1", name: "delete_task", label: "Deleting", status: "success", approval: { id: "p", summary: "Delete task", status: "pending", error: null, expires_at: at(9) } };
     expect(decodeTools(JSON.stringify([ok, { id: 2 }, "junk"]))).toEqual([ok]);

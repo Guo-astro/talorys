@@ -91,23 +91,33 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
   const now = new Date().toISOString();
 
   let paused = 0; // existing automations this backup paused
+  // The schema validates the compared timestamps but they may carry a UTC offset;
+  // normalise to the ISO-UTC shape the app itself writes so text comparisons in
+  // the guarded upserts (and against rows this import stores) are correct.
+  const iso = (v: string): string => new Date(v).toISOString();
+
   const summary = db.transaction((): ImportSummary => {
     for (const p of d.projects) {
       db.run(
         `INSERT INTO tal_projects (id, name, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, status = excluded.status, updated_at = excluded.updated_at
          WHERE excluded.updated_at > tal_projects.updated_at`,
-        p.id, p.name, str(p.description), pick(p.status, ["active", "paused", "completed", "archived"], "active"), p.created_at, p.updated_at,
+        p.id, p.name, str(p.description), pick(p.status, ["active", "paused", "completed", "archived"], "active"), p.created_at, iso(p.updated_at),
       );
     }
     const projectExists = (id: unknown) => typeof id === "string" && !!db.one(`SELECT 1 AS x FROM tal_projects WHERE id = ?`, id);
     for (const c of d.conversations) {
       // Summaries go into the system prompt but are invisible in the UI, so imported ones are
       // dropped and regenerated from the (visible) messages when needed.
+      // The guard is row-level last-writer-wins on updated_at, which also moves when a
+      // message is added (ConversationRepository.touch()): a backup exported after newer
+      // chat activity beats a rename made earlier. If renames ever need to win on their
+      // own, they need a separate title timestamp; the tests pin this behaviour.
       db.run(
         `INSERT INTO tal_conversations (id, title, summary, summary_upto, created_at, updated_at) VALUES (?, ?, NULL, NULL, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at`,
-        c.id, c.title, c.created_at, c.updated_at,
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
+         WHERE excluded.updated_at > tal_conversations.updated_at`,
+        c.id, c.title, c.created_at, iso(c.updated_at),
       );
     }
     let messages = 0;
@@ -126,8 +136,9 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
     const importedLinks: { id: string; superseded_by: string }[] = [];
     for (const m of d.memories) {
       const existing = db.one<{ content: string; updated_at: string }>(`SELECT content, updated_at FROM tal_memories WHERE id = ?`, m.id);
+      const updated_at = iso(m.updated_at);
       // Never overwrite a newer local edit with an older backup copy.
-      if (existing && existing.updated_at >= m.updated_at) continue;
+      if (existing && existing.updated_at >= updated_at) continue;
       // Older backups (before Smart Memory) have no lifecycle fields: those memories stay current.
       const status = pick(m.status, MEMORY_STATUSES, "active");
       db.run(
@@ -136,7 +147,7 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
          ON CONFLICT(id) DO UPDATE SET content = excluded.content, category = excluded.category, status = excluded.status,
            valid_from = excluded.valid_from, valid_until = excluded.valid_until, updated_at = excluded.updated_at`,
         m.id, m.content, pick(m.category, MEMORY_CATEGORIES, "other"), "import", status,
-        statedDate(m.valid_from), statedDate(m.valid_until), m.created_at, m.updated_at,
+        statedDate(m.valid_from), statedDate(m.valid_until), m.created_at, updated_at,
       );
       if (typeof m.superseded_by === "string" && m.superseded_by) importedLinks.push({ id: m.id, superseded_by: m.superseded_by });
     }
@@ -156,7 +167,7 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
          WHERE excluded.updated_at > tal_tasks.updated_at`,
         t.id, t.title, str(t.description), pick(t.status, ["todo", "in_progress", "done"], "todo"),
         pick(t.priority, ["low", "medium", "high", "urgent"], "medium"), strOrNull(t.due_at),
-        projectExists(t.project_id) ? t.project_id : null, t.created_at, t.updated_at, strOrNull(t.completed_at),
+        projectExists(t.project_id) ? t.project_id : null, t.created_at, iso(t.updated_at), strOrNull(t.completed_at),
       );
     }
     for (const n of d.notes) {
@@ -164,7 +175,7 @@ export async function importData(s: Services, raw: unknown): Promise<ImportSumma
         `INSERT INTO tal_notes (id, title, content, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, content = excluded.content, project_id = excluded.project_id, updated_at = excluded.updated_at
          WHERE excluded.updated_at > tal_notes.updated_at`,
-        n.id, n.title, n.content, projectExists(n.project_id) ? n.project_id : null, n.created_at, n.updated_at,
+        n.id, n.title, n.content, projectExists(n.project_id) ? n.project_id : null, n.created_at, iso(n.updated_at),
       );
     }
     let automations = 0;

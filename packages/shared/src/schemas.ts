@@ -374,7 +374,7 @@ export const backupSchema = z.object({
   app_version: z.string().optional(),
   data: z.object({
     settings: z.record(z.string(), z.unknown()).optional().default({}),
-    conversations: z.array(backupEntity({ id, title: z.string(), created_at: z.string(), updated_at: z.string() })).default([]),
+    conversations: z.array(backupEntity({ id, title: z.string(), created_at: z.string(), updated_at: isoDate })).default([]),
     messages: z
       .array(
         backupEntity({
@@ -386,10 +386,10 @@ export const backupSchema = z.object({
         }),
       )
       .default([]),
-    memories: z.array(backupEntity({ id, content: z.string(), category: z.string(), created_at: z.string(), updated_at: z.string() })).default([]),
-    tasks: z.array(backupEntity({ id, title: z.string(), status: z.string(), created_at: z.string(), updated_at: z.string() })).default([]),
-    notes: z.array(backupEntity({ id, title: z.string(), content: z.string(), created_at: z.string(), updated_at: z.string() })).default([]),
-    projects: z.array(backupEntity({ id, name: z.string(), created_at: z.string(), updated_at: z.string() })).default([]),
+    memories: z.array(backupEntity({ id, content: z.string(), category: z.string(), created_at: z.string(), updated_at: isoDate })).default([]),
+    tasks: z.array(backupEntity({ id, title: z.string(), status: z.string(), created_at: z.string(), updated_at: isoDate })).default([]),
+    notes: z.array(backupEntity({ id, title: z.string(), content: z.string(), created_at: z.string(), updated_at: isoDate })).default([]),
+    projects: z.array(backupEntity({ id, name: z.string(), created_at: z.string(), updated_at: isoDate })).default([]),
     automations: z.array(backupEntity({ id, name: z.string(), kind: z.string(), schedule: z.unknown() })).default([]),
     /** Connection details only: no credentials, sessions or tool choices. Imported servers arrive disabled. */
     mcp_servers: z.array(backupEntity({ id, name: z.string(), url: z.string(), auth_type: z.string() })).default([]),
